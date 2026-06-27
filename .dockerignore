@@ -1,0 +1,16 @@
+.git
+.venv
+.env
+.minutesplan_extracted
+minutesplan.zip
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+.mypy_cache
+docs
+capture
+tests
+deploy
+*.m4a
+*.wav
