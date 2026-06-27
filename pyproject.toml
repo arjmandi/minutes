@@ -16,6 +16,7 @@ dependencies = [
     "websockets>=13.1",
     "pyjwt>=2.9",
     "anthropic>=0.40",
+    "aioboto3>=13.2",
 ]
 
 # Application layout (run from repo root), not a distributable package.

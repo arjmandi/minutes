@@ -108,6 +108,8 @@ async def ingest_ws(ws: WebSocket) -> None:
             transcriber_factory=ws.app.state.transcriber_factory,
             translator_factory=ws.app.state.translator_factory,
             translation_targets=settings.translation_targets,
+            storage=ws.app.state.storage,
+            chunk_interval_s=settings.chunk_interval_minutes * 60,
             worker_id=registry.worker_id,
             finalize_timeout_s=settings.finalize_timeout_s,
         )

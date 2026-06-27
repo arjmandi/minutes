@@ -17,7 +17,7 @@ from app.audio.frames import encode_frame
 from app.auth.tokens import issue_capability_token
 from app.config import get_settings
 from app.db.base import make_engine, make_session_factory
-from app.db.models import TranscriptSegment, Translation
+from app.db.models import AudioChunk, ChunkState, TranscriptSegment, Translation
 from app.main import app
 
 
@@ -54,6 +54,30 @@ def _counts(session_id: str) -> tuple[int, int]:
     return asyncio.run(_q())
 
 
+def _chunk_counts(session_id: str) -> tuple[int, int]:
+    async def _q() -> tuple[int, int]:
+        engine = make_engine(get_settings().database_url)
+        factory = make_session_factory(engine)
+        async with factory() as db:
+            total = await db.scalar(
+                select(func.count())
+                .select_from(AudioChunk)
+                .where(AudioChunk.session_id == uuid.UUID(session_id))
+            )
+            recorded = await db.scalar(
+                select(func.count())
+                .select_from(AudioChunk)
+                .where(
+                    AudioChunk.session_id == uuid.UUID(session_id),
+                    AudioChunk.state == ChunkState.recorded,
+                )
+            )
+        await engine.dispose()
+        return int(total or 0), int(recorded or 0)
+
+    return asyncio.run(_q())
+
+
 def test_pipeline_persists_one_segment_per_frame():
     settings = get_settings()
     if settings.soniox_api_key:
@@ -86,3 +110,8 @@ def test_pipeline_persists_one_segment_per_frame():
     # each non-"en" target. So translations == segments × (non-"en" targets).
     non_en_targets = [t for t in get_settings().translation_targets if t != "en"]
     assert trans == 3 * len(non_en_targets)
+
+    # Audio archival: the final partial chunk is flushed on end and marked RECORDED (FakeStorage).
+    total_chunks, recorded_chunks = _chunk_counts(session_id)
+    assert total_chunks == 1
+    assert recorded_chunks == 1

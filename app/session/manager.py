@@ -16,11 +16,13 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
 from app import fanout
+from app.audio.wav import BYTES_PER_SECOND, wrap_pcm
 from app.db import repo
-from app.db.models import SessionStatus
+from app.db.models import ChunkState, SessionStatus
 from app.logging import get_logger
 from app.session.adapter import ClientCaptureAdapter
 from app.session.events import AudioFrame, EndReason, SessionEnded, SessionStarted
+from app.storage.base import Storage
 from app.transcribe.base import FinalSegment, Transcriber
 from app.transcribe.factory import TranscriberFactory
 from app.translate.base import Translator
@@ -31,6 +33,7 @@ MIXED = "mixed"
 _AUDIO_QUEUE_MAX = 256
 _TRANSLATION_QUEUE_MAX = 256
 _FANOUT_QUEUE_MAX = 512  # interims are frequent; cap separately, drop-on-full off the STT path
+_CHUNK_QUEUE_MAX = 2000  # ~200s buffer so the archive rarely drops during a rotation upload
 _PUT_TIMEOUT_S = 1.0
 _PUBLISH_TIMEOUT_S = 2.0
 
@@ -51,6 +54,8 @@ class SessionManager:
         transcriber_factory: TranscriberFactory,
         translator_factory: TranslatorFactory,
         translation_targets: list[str],
+        storage: Storage,
+        chunk_interval_s: int,
         worker_id: str,
         finalize_timeout_s: int = 30,
     ) -> None:
@@ -59,8 +64,33 @@ class SessionManager:
         self._transcriber_factory = transcriber_factory
         self._translator_factory = translator_factory
         self._translation_targets = translation_targets
+        self._storage = storage
+        self._chunk_interval_s = chunk_interval_s
         self._worker_id = worker_id
         self._finalize_timeout_s = finalize_timeout_s
+
+    async def _flush_chunk(self, sid: uuid.UUID, seq: int, pcm: bytes) -> None:
+        """Two-phase archive write: reserve row -> upload WAV -> mark recorded (spec v3 §9)."""
+        key = f"sessions/{sid}/{MIXED}/{seq:06d}.wav"
+        async with self._session_factory() as db:
+            chunk_id = await repo.reserve_chunk(
+                db,
+                session_id=sid,
+                speaker_id=MIXED,
+                s3_key=key,
+                seq=seq,
+                duration_s=len(pcm) / BYTES_PER_SECOND,
+            )
+            await db.commit()
+        try:
+            await self._storage.upload(key, wrap_pcm(pcm))
+            async with self._session_factory() as db:
+                await repo.mark_chunk(db, chunk_id=chunk_id, state=ChunkState.recorded)
+                await db.commit()
+        except Exception as exc:  # noqa: BLE001 — row stays PENDING, reconcilable on a sweep
+            log.warning(
+                "session.chunk_upload_failed", session_id=str(sid), seq=seq, error=repr(exc)
+            )
 
     async def run(self, adapter: ClientCaptureAdapter) -> CallSummary:
         meeting_id: uuid.UUID | None = None
@@ -68,9 +98,11 @@ class SessionManager:
         audio_q: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=_AUDIO_QUEUE_MAX)
         translation_q: asyncio.Queue = asyncio.Queue(maxsize=_TRANSLATION_QUEUE_MAX)
         fanout_q: asyncio.Queue = asyncio.Queue(maxsize=_FANOUT_QUEUE_MAX)
+        chunk_q: asyncio.Queue = asyncio.Queue(maxsize=_CHUNK_QUEUE_MAX)
         persist_task: asyncio.Task[int] | None = None
         translate_task: asyncio.Task | None = None
         fanout_task: asyncio.Task | None = None
+        chunker_task: asyncio.Task | None = None
         segments = 0
         reason = EndReason.normal
 
@@ -99,6 +131,22 @@ class SessionManager:
                     )
                 except Exception:  # noqa: BLE001 — best-effort (incl. a hung/slow Redis)
                     pass
+
+        async def chunker_worker(sid: uuid.UUID) -> None:
+            rotate_bytes = max(self._chunk_interval_s, 1) * BYTES_PER_SECOND
+            buf = bytearray()
+            seq = 0
+            while True:
+                item = await chunk_q.get()
+                if item is None:
+                    if buf:
+                        await self._flush_chunk(sid, seq, bytes(buf))  # flush final partial
+                    return
+                buf.extend(item)
+                if len(buf) >= rotate_bytes:
+                    await self._flush_chunk(sid, seq, bytes(buf))
+                    seq += 1
+                    buf = bytearray()
 
         async def persist(transcriber: Transcriber, mid: uuid.UUID, sid: uuid.UUID) -> int:
             count = 0
@@ -218,10 +266,15 @@ class SessionManager:
                         translate_worker(self._translator_factory(None), session_id)
                     )
                     fanout_task = asyncio.create_task(fanout_worker(meeting_id))
+                    chunker_task = asyncio.create_task(chunker_worker(session_id))
                     log.info("session.started", session_id=str(session_id), call_id=event.call_id)
                 elif isinstance(event, AudioFrame):
                     if not await put_audio(event.pcm):
                         break  # consumer died -> stop; finally will finalize
+                    try:
+                        chunk_q.put_nowait(event.pcm)  # tee to the archive (drop-on-full)
+                    except asyncio.QueueFull:
+                        log.warning("session.chunk_dropped", session_id=str(session_id))
                 elif isinstance(event, SessionEnded):
                     reason = event.reason
                     break
@@ -269,6 +322,21 @@ class SessionManager:
                 except Exception as exc:  # noqa: BLE001
                     log.warning(
                         "session.fanout_drain_failed",
+                        session_id=str(session_id),
+                        error=repr(exc),
+                    )
+            # Drain the chunker: flush the final partial chunk to storage (bounded).
+            if chunker_task is not None:
+                _put_sentinel(chunk_q)
+                try:
+                    await asyncio.wait_for(chunker_task, timeout=self._finalize_timeout_s)
+                except TimeoutError:
+                    log.error("session.chunk_flush_timeout", session_id=str(session_id))
+                    chunker_task.cancel()
+                    await asyncio.gather(chunker_task, return_exceptions=True)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning(
+                        "session.chunk_drain_failed",
                         session_id=str(session_id),
                         error=repr(exc),
                     )

@@ -12,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db.models import (
+    AudioChunk,
+    ChunkState,
     Meeting,
     Platform,
     Session,
@@ -168,6 +170,39 @@ async def upsert_translation(
         )
     )
     await db.execute(stmt)
+
+
+# --- audio archival (two-phase write, spec v3 §9) ---
+
+
+async def reserve_chunk(
+    db: AsyncSession,
+    *,
+    session_id: uuid.UUID,
+    speaker_id: str,
+    s3_key: str,
+    seq: int,
+    duration_s: float,
+) -> uuid.UUID:
+    """Phase 1: reserve the (seq, s3_key) row as PENDING before the upload."""
+    chunk = AudioChunk(
+        session_id=session_id,
+        speaker_id=speaker_id,
+        s3_key=s3_key,
+        seq=seq,
+        state=ChunkState.pending,
+        duration_s=duration_s,
+    )
+    db.add(chunk)
+    await db.flush()
+    return chunk.id
+
+
+async def mark_chunk(db: AsyncSession, *, chunk_id: uuid.UUID, state: ChunkState) -> None:
+    """Phase 2: mark the chunk RECORDED after a successful upload (or LOST on reconciliation)."""
+    chunk = await db.get(AudioChunk, chunk_id)
+    if chunk is not None:
+        chunk.state = state
 
 
 # --- read side (transcript view) ---

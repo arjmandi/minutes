@@ -16,6 +16,7 @@ from app.api import auth, health, ingest, meetings
 from app.config import DEV_ENVS, Settings, get_settings
 from app.db.base import make_engine, make_session_factory
 from app.logging import configure_logging, get_logger
+from app.storage.factory import make_storage
 from app.transcribe.factory import make_transcriber_factory
 from app.translate.factory import make_translator_factory
 
@@ -44,6 +45,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         app.state.transcriber_factory = make_transcriber_factory(settings)
         app.state.translator_factory = make_translator_factory(settings)
+        app.state.storage = make_storage(settings)
 
         log.info("startup.complete", worker_id=worker_id, env=settings.app_env)
         try:

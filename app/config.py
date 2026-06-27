@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
 
     # Object storage (S3 protocol: MinIO locally, S3-compatible object storage in prod)
+    s3_enabled: bool = False  # False -> FakeStorage (local/tests); True -> real S3/Spaces uploads
     s3_endpoint_url: str = "http://localhost:9000"
     s3_region: str = "eu-central-1"
     s3_bucket: str = "minutes-audio"
