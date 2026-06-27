@@ -16,13 +16,10 @@ from app.logging import get_logger
 log = get_logger("translate")
 
 
-def _strip_fences(raw: str) -> str:
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = raw.split("\n", 1)[-1] if "\n" in raw else raw
-        if raw.endswith("```"):
-            raw = raw[: raw.rfind("```")]
-    return raw.strip()
+def _extract_json_object(raw: str) -> str:
+    """Pull the JSON object out of a model reply, tolerating code fences and single-line output."""
+    start, end = raw.find("{"), raw.rfind("}")
+    return raw[start : end + 1] if start != -1 and end > start else raw.strip()
 
 
 class ClaudeTranslator:
@@ -68,7 +65,7 @@ class ClaudeTranslator:
                 system=system,
                 messages=[{"role": "user", "content": user}],
             )
-            data = json.loads(_strip_fences(resp.content[0].text))
+            data = json.loads(_extract_json_object(resp.content[0].text))
             return {t: str(data[t]) for t in targets if isinstance(data.get(t), str)}
         except Exception as exc:  # noqa: BLE001 — best-effort; never propagate into the STT path
             log.warning("translate.failed", model=self._model, error=repr(exc))

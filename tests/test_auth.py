@@ -38,14 +38,17 @@ def _raw(claims: dict) -> str:
 
 
 def test_roundtrip_and_scope():
-    claims = verify_capability_token(_tok(meetings=["m1"]), secret=SECRET)
+    claims = verify_capability_token(_tok(meetings=["meet:m1"]), secret=SECRET)
     assert claims.principal == "op"
-    assert authorize_meeting(claims, "m1")
-    assert not authorize_meeting(claims, "m2")
+    assert authorize_meeting(claims, "meet", "m1")
+    assert not authorize_meeting(claims, "meet", "m2")
+    assert not authorize_meeting(claims, "teams", "m1")  # platform-scoped: no cross-platform IDOR
 
 
 def test_wildcard_meetings():
-    assert authorize_meeting(verify_capability_token(_tok(), secret=SECRET), "anything")
+    claims = verify_capability_token(_tok(), secret=SECRET)
+    assert authorize_meeting(claims, "meet", "anything")
+    assert authorize_meeting(claims, "teams", "anything")
 
 
 def test_expired_rejected():
@@ -159,7 +162,7 @@ def test_ingest_forbidden_for_unauthorized_meeting():
     with TestClient(app) as client:
         if client.get("/readyz").status_code != 200:
             pytest.skip("datastores not ready")
-        token = _scoped_token(["allowed-mtg"])
+        token = _scoped_token(["meet:allowed-mtg"])
         with client.websocket_connect(f"/ingest?token={token}") as ws:
             ws.send_json(_hello("a-different-mtg", f"fb-{uuid.uuid4().hex[:8]}"))
             msg = ws.receive_json()
@@ -171,7 +174,7 @@ def test_ingest_admits_authorized_meeting():
     with TestClient(app) as client:
         if client.get("/readyz").status_code != 200:
             pytest.skip("datastores not ready")
-        token = _scoped_token(["allowed-mtg"])
+        token = _scoped_token(["meet:allowed-mtg"])
         call_id = f"ok-{uuid.uuid4().hex[:8]}"
         with client.websocket_connect(f"/ingest?token={token}") as ws:
             ws.send_json(_hello("allowed-mtg", call_id))
@@ -184,7 +187,7 @@ def test_ingest_admits_via_subprotocol():
     with TestClient(app) as client:
         if client.get("/readyz").status_code != 200:
             pytest.skip("datastores not ready")
-        token = _scoped_token(["allowed-mtg"])
+        token = _scoped_token(["meet:allowed-mtg"])
         with client.websocket_connect("/ingest", subprotocols=[AUTH_SUBPROTOCOL, token]) as ws:
             ws.send_json(_hello("allowed-mtg", f"sp-{uuid.uuid4().hex[:8]}"))
             assert ws.receive_json()["type"] == "admitted"

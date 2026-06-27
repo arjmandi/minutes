@@ -30,7 +30,9 @@ log = get_logger("session")
 MIXED = "mixed"
 _AUDIO_QUEUE_MAX = 256
 _TRANSLATION_QUEUE_MAX = 256
+_FANOUT_QUEUE_MAX = 512  # interims are frequent; cap separately, drop-on-full off the STT path
 _PUT_TIMEOUT_S = 1.0
+_PUBLISH_TIMEOUT_S = 2.0
 
 
 @dataclass(slots=True)
@@ -65,8 +67,10 @@ class SessionManager:
         session_id: uuid.UUID | None = None
         audio_q: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=_AUDIO_QUEUE_MAX)
         translation_q: asyncio.Queue = asyncio.Queue(maxsize=_TRANSLATION_QUEUE_MAX)
+        fanout_q: asyncio.Queue = asyncio.Queue(maxsize=_FANOUT_QUEUE_MAX)
         persist_task: asyncio.Task[int] | None = None
         translate_task: asyncio.Task | None = None
+        fanout_task: asyncio.Task | None = None
         segments = 0
         reason = EndReason.normal
 
@@ -77,15 +81,32 @@ class SessionManager:
                     return
                 yield item
 
+        def enqueue_fanout(event: dict) -> None:
+            # Off the STT hot path: drop on a full queue rather than ever block transcription.
+            try:
+                fanout_q.put_nowait(event)
+            except asyncio.QueueFull:
+                log.warning("session.fanout_dropped", session_id=str(session_id))
+
+        async def fanout_worker(mid: uuid.UUID) -> None:
+            while True:
+                item = await fanout_q.get()
+                if item is None:
+                    return
+                try:
+                    await asyncio.wait_for(
+                        fanout.publish(self._redis, mid, item), timeout=_PUBLISH_TIMEOUT_S
+                    )
+                except Exception:  # noqa: BLE001 — best-effort (incl. a hung/slow Redis)
+                    pass
+
         async def persist(transcriber: Transcriber, mid: uuid.UUID, sid: uuid.UUID) -> int:
             count = 0
             gen = transcriber.stream(audio_gen())
             try:
                 async for event in gen:
                     if not isinstance(event, FinalSegment):
-                        await fanout.publish(
-                            self._redis, mid, {"kind": "interim", "text": event.text}
-                        )
+                        enqueue_fanout({"kind": "interim", "text": event.text})
                         continue  # interim is live-only, not persisted
                     try:
                         async with self._session_factory() as db:
@@ -107,9 +128,13 @@ class SessionManager:
                             "session.segment_persist_failed", session_id=str(sid), error=repr(exc)
                         )
                         continue
-                    await fanout.publish(
-                        self._redis,
-                        mid,
+                    # Durable + decoupled work first, then live fan-out; all non-blocking.
+                    if self._translation_targets:
+                        try:
+                            translation_q.put_nowait((seg_id, event.text, event.language))
+                        except asyncio.QueueFull:
+                            log.warning("session.translation_dropped", session_id=str(sid))
+                    enqueue_fanout(
                         {
                             "kind": "final",
                             "id": str(seg_id),
@@ -118,19 +143,13 @@ class SessionManager:
                             "speaker": MIXED,
                             "start_ms": event.start_ms,
                             "end_ms": event.end_ms,
-                        },
+                        }
                     )
-                    # Hand off to translation: best-effort, non-blocking (never back-pressure STT).
-                    if self._translation_targets:
-                        try:
-                            translation_q.put_nowait((seg_id, event.text, event.language))
-                        except asyncio.QueueFull:
-                            log.warning("session.translation_dropped", session_id=str(sid))
             finally:
                 await gen.aclose()
             return count
 
-        async def translate_worker(translator: Translator, mid: uuid.UUID, sid: uuid.UUID) -> None:
+        async def translate_worker(translator: Translator, sid: uuid.UUID) -> None:
             while True:
                 item = await translation_q.get()
                 if item is None:
@@ -151,15 +170,13 @@ class SessionManager:
                             )
                         await db.commit()
                     for target, translated in out.items():
-                        await fanout.publish(
-                            self._redis,
-                            mid,
+                        enqueue_fanout(
                             {
                                 "kind": "translation",
                                 "segment_id": str(seg_id),
                                 "target": target,
                                 "text": translated,
-                            },
+                            }
                         )
                 except Exception as exc:  # noqa: BLE001 — translation is best-effort
                     log.warning("session.translate_failed", session_id=str(sid), error=repr(exc))
@@ -198,8 +215,9 @@ class SessionManager:
                         persist(self._transcriber_factory(None), meeting_id, session_id)
                     )
                     translate_task = asyncio.create_task(
-                        translate_worker(self._translator_factory(None), meeting_id, session_id)
+                        translate_worker(self._translator_factory(None), session_id)
                     )
+                    fanout_task = asyncio.create_task(fanout_worker(meeting_id))
                     log.info("session.started", session_id=str(session_id), call_id=event.call_id)
                 elif isinstance(event, AudioFrame):
                     if not await put_audio(event.pcm):
@@ -237,6 +255,20 @@ class SessionManager:
                 except Exception as exc:  # noqa: BLE001
                     log.error(
                         "session.translate_drain_failed",
+                        session_id=str(session_id),
+                        error=repr(exc),
+                    )
+            # Drain live fan-out (bounded).
+            if fanout_task is not None:
+                _put_sentinel(fanout_q)
+                try:
+                    await asyncio.wait_for(fanout_task, timeout=self._finalize_timeout_s)
+                except TimeoutError:
+                    fanout_task.cancel()
+                    await asyncio.gather(fanout_task, return_exceptions=True)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning(
+                        "session.fanout_drain_failed",
                         session_id=str(session_id),
                         error=repr(exc),
                     )

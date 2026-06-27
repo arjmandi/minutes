@@ -85,7 +85,7 @@ async def ingest_ws(ws: WebSocket) -> None:
             await ws.close(code=_CLOSE_PROTOCOL)
             return
 
-        if not authorize_meeting(claims, external_meeting_id):
+        if not authorize_meeting(claims, platform, external_meeting_id):
             await ws.send_json({"type": "forbidden", "reason": "meeting_not_authorized"})
             await ws.close(code=_CLOSE_POLICY)
             return

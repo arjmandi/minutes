@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
+from app.translate.claude import _extract_json_object
 from app.translate.fake import FakeTranslator
+
+
+def test_extract_json_object_tolerates_fences_and_single_line():
+    assert _extract_json_object('```json\n{"en":"hi"}\n```') == '{"en":"hi"}'
+    assert _extract_json_object('```{"en":"hi"}```') == '{"en":"hi"}'  # single-line fenced
+    assert _extract_json_object('{"en":"hi"}') == '{"en":"hi"}'
+    assert _extract_json_object('here you go: {"en":"hi"} done') == '{"en":"hi"}'
 
 
 async def test_translates_to_targets():

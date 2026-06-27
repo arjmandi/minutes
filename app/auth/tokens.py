@@ -76,6 +76,8 @@ def verify_capability_token(token: str, *, secret: str, algorithm: str = "HS256"
     return Claims(principal=sub, meetings=meetings, raw=payload)
 
 
-def authorize_meeting(claims: Claims, external_meeting_id: str) -> bool:
-    """Per-session authorization: the principal may capture this meeting."""
-    return "*" in claims.meetings or external_meeting_id in claims.meetings
+def authorize_meeting(claims: Claims, platform: str, external_meeting_id: str) -> bool:
+    """Per-session authorization. Scopes are "platform:external_meeting_id" (or "*"), matching the
+    DB identity UNIQUE(platform, external_meeting_id) so an id reused across platforms can't be
+    cross-authorized."""
+    return "*" in claims.meetings or f"{platform}:{external_meeting_id}" in claims.meetings

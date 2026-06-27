@@ -19,8 +19,10 @@ from app import fanout
 from app.auth.dependencies import require_claims, ws_token
 from app.auth.tokens import AuthError, Claims, authorize_meeting, verify_capability_token
 from app.db import repo
+from app.logging import get_logger
 
 router = APIRouter(prefix="/meetings", tags=["meetings"])
+log = get_logger("meetings")
 
 
 @router.get("")
@@ -36,7 +38,7 @@ async def list_meetings(request: Request, claims: Claims = Depends(require_claim
                 "created_at": m.created_at.isoformat(),
             }
             for m in meetings
-            if authorize_meeting(claims, m.external_meeting_id)
+            if authorize_meeting(claims, m.platform.value, m.external_meeting_id)
         ]
 
 
@@ -45,15 +47,18 @@ async def get_transcript(
     meeting_id: uuid.UUID,
     request: Request,
     after: int = 0,
+    limit: int = 500,
     claims: Claims = Depends(require_claims),
 ) -> list[dict]:
     async with request.app.state.session_factory() as db:
         meeting = await repo.get_meeting(db, meeting_id)
         if meeting is None:
             raise HTTPException(status_code=404, detail="not found")
-        if not authorize_meeting(claims, meeting.external_meeting_id):
+        if not authorize_meeting(claims, meeting.platform.value, meeting.external_meeting_id):
             raise HTTPException(status_code=403, detail="forbidden")
-        segments = await repo.transcript_for_meeting(db, meeting_id, after_seq=after)
+        segments = await repo.transcript_for_meeting(
+            db, meeting_id, after_seq=after, limit=min(max(limit, 1), 1000)
+        )
         return [
             {
                 "id": str(s.id),
@@ -85,7 +90,9 @@ async def live(ws: WebSocket, meeting_id: uuid.UUID) -> None:
 
     async with ws.app.state.session_factory() as db:
         meeting = await repo.get_meeting(db, meeting_id)
-    if meeting is None or not authorize_meeting(claims, meeting.external_meeting_id):
+    if meeting is None or not authorize_meeting(
+        claims, meeting.platform.value, meeting.external_meeting_id
+    ):
         await ws.close(code=1008, reason="forbidden")
         return
 
@@ -96,7 +103,11 @@ async def live(ws: WebSocket, meeting_id: uuid.UUID) -> None:
     disconnect = asyncio.create_task(_await_disconnect(ws))
     try:
         while not disconnect.done():
-            resp = await redis.xread({key: last_id}, block=2000, count=100)
+            try:
+                resp = await redis.xread({key: last_id}, block=2000, count=100)
+            except Exception as exc:  # noqa: BLE001 — Redis hiccup: degrade to no live updates
+                log.warning("live.xread_failed", error=repr(exc))
+                break
             for _stream, entries in resp or []:
                 for entry_id, fields in entries:
                     last_id = entry_id

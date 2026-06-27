@@ -183,14 +183,19 @@ async def get_meeting(db: AsyncSession, meeting_id: uuid.UUID) -> Meeting | None
 
 
 async def transcript_for_meeting(
-    db: AsyncSession, meeting_id: uuid.UUID, *, after_seq: int = 0
+    db: AsyncSession, meeting_id: uuid.UUID, *, after_seq: int = 0, limit: int = 500
 ) -> list[TranscriptSegment]:
-    """Final segments across the meeting's sessions, ordered by meeting_seq, translations eager."""
+    """Final segments across the meeting's sessions, ordered by meeting_seq, translations eager.
+
+    Paged: returns at most ``limit`` segments with meeting_seq > after_seq; the caller pages by the
+    max returned meeting_seq.
+    """
     rows = await db.execute(
         select(TranscriptSegment)
         .join(Session, TranscriptSegment.session_id == Session.id)
         .where(Session.meeting_id == meeting_id, TranscriptSegment.meeting_seq > after_seq)
         .order_by(TranscriptSegment.meeting_seq)
+        .limit(limit)
         .options(selectinload(TranscriptSegment.translations))
     )
     return list(rows.scalars())
