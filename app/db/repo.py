@@ -200,6 +200,16 @@ async def reserve_chunk(
     return chunk.id
 
 
+async def next_chunk_seq(db: AsyncSession, *, session_id: uuid.UUID, speaker_id: str) -> int:
+    """Monotonic chunk seq for (session, speaker) — survives reconnect (no reset to 0)."""
+    value = await db.scalar(
+        select(func.coalesce(func.max(AudioChunk.seq), -1) + 1).where(
+            AudioChunk.session_id == session_id, AudioChunk.speaker_id == speaker_id
+        )
+    )
+    return int(value or 0)
+
+
 async def mark_chunk(db: AsyncSession, *, chunk_id: uuid.UUID, state: ChunkState) -> None:
     """Phase 2: mark the chunk RECORDED after a successful upload (or LOST on reconciliation)."""
     chunk = await db.get(AudioChunk, chunk_id)
@@ -284,3 +294,20 @@ async def expired_meeting_ids(
 ) -> list[uuid.UUID]:
     rows = await db.execute(select(Meeting.id).where(Meeting.created_at < before).limit(limit))
     return [r[0] for r in rows.all()]
+
+
+async def pending_chunks_for_ended_sessions(
+    db: AsyncSession, *, limit: int = 500
+) -> list[tuple[uuid.UUID, str]]:
+    """PENDING chunks whose session has ended/failed — their upload is over, so a still-PENDING
+    row is an orphan to reconcile (RECORDED if the object exists, else LOST)."""
+    rows = await db.execute(
+        select(AudioChunk.id, AudioChunk.s3_key)
+        .join(Session, AudioChunk.session_id == Session.id)
+        .where(
+            AudioChunk.state == ChunkState.pending,
+            Session.status.in_([SessionStatus.ended, SessionStatus.failed]),
+        )
+        .limit(limit)
+    )
+    return [(r[0], r[1]) for r in rows.all()]

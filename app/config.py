@@ -71,7 +71,8 @@ class Settings(BaseSettings):
     finalize_timeout_s: int = 30  # bound on awaiting the per-call pipeline during teardown
 
     # GDPR
-    retention_days: int = 90
+    # ge=1 floor: a 0/negative cutoff must never purge the whole dataset.
+    retention_days: int = Field(default=90, ge=1)
     require_consent: bool = False  # when true, ingest refuses meetings without granted consent
 
     @model_validator(mode="after")

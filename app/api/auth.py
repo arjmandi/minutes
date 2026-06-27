@@ -18,6 +18,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 class DevTokenRequest(BaseModel):
     principal: str = "dev"
     meetings: list[str] = Field(default_factory=lambda: ["*"])
+    admin: bool = False
 
 
 class DevTokenResponse(BaseModel):
@@ -36,5 +37,6 @@ async def dev_token(body: DevTokenRequest, request: Request) -> DevTokenResponse
         algorithm=settings.auth_algorithm,
         ttl_s=settings.auth_token_ttl_s,
         meetings=body.meetings,
+        admin=body.admin,
     )
     return DevTokenResponse(token=token, ttl_s=settings.auth_token_ttl_s)

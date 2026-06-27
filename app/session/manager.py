@@ -36,6 +36,7 @@ _FANOUT_QUEUE_MAX = 512  # interims are frequent; cap separately, drop-on-full o
 _CHUNK_QUEUE_MAX = 2000  # ~200s buffer so the archive rarely drops during a rotation upload
 _PUT_TIMEOUT_S = 1.0
 _PUBLISH_TIMEOUT_S = 2.0
+_CHUNK_UPLOAD_TIMEOUT_S = 120.0  # bound a hung upload (a real one is seconds); leaves PENDING
 
 
 @dataclass(slots=True)
@@ -70,24 +71,27 @@ class SessionManager:
         self._finalize_timeout_s = finalize_timeout_s
 
     async def _flush_chunk(self, sid: uuid.UUID, seq: int, pcm: bytes) -> None:
-        """Two-phase archive write: reserve row -> upload WAV -> mark recorded (spec v3 §9)."""
+        """Two-phase archive write: reserve row -> upload WAV -> mark recorded (spec v3 §9).
+        On failure the PENDING row is left for app.jobs.reconcile to resolve (RECORDED / LOST)."""
         key = f"sessions/{sid}/{MIXED}/{seq:06d}.wav"
-        async with self._session_factory() as db:
-            chunk_id = await repo.reserve_chunk(
-                db,
-                session_id=sid,
-                speaker_id=MIXED,
-                s3_key=key,
-                seq=seq,
-                duration_s=len(pcm) / BYTES_PER_SECOND,
-            )
-            await db.commit()
         try:
-            await self._storage.upload(key, wrap_pcm(pcm))
+            async with self._session_factory() as db:
+                chunk_id = await repo.reserve_chunk(
+                    db,
+                    session_id=sid,
+                    speaker_id=MIXED,
+                    s3_key=key,
+                    seq=seq,
+                    duration_s=len(pcm) / BYTES_PER_SECOND,
+                )
+                await db.commit()
+            await asyncio.wait_for(
+                self._storage.upload(key, wrap_pcm(pcm)), timeout=_CHUNK_UPLOAD_TIMEOUT_S
+            )
             async with self._session_factory() as db:
                 await repo.mark_chunk(db, chunk_id=chunk_id, state=ChunkState.recorded)
                 await db.commit()
-        except Exception as exc:  # noqa: BLE001 — row stays PENDING, reconcilable on a sweep
+        except Exception as exc:  # noqa: BLE001 — leave PENDING for the reconciler
             log.warning(
                 "session.chunk_upload_failed", session_id=str(sid), seq=seq, error=repr(exc)
             )
@@ -134,8 +138,9 @@ class SessionManager:
 
         async def chunker_worker(sid: uuid.UUID) -> None:
             rotate_bytes = max(self._chunk_interval_s, 1) * BYTES_PER_SECOND
+            async with self._session_factory() as db:
+                seq = await repo.next_chunk_seq(db, session_id=sid, speaker_id=MIXED)  # no reset
             buf = bytearray()
-            seq = 0
             while True:
                 item = await chunk_q.get()
                 if item is None:

@@ -29,6 +29,7 @@ class Claims:
     principal: str
     meetings: list[str]
     raw: dict
+    admin: bool = False  # required for destructive ops (erasure); not granted to capture tokens
 
 
 def issue_capability_token(
@@ -38,6 +39,7 @@ def issue_capability_token(
     algorithm: str = "HS256",
     ttl_s: int = 3600,
     meetings: list[str] | None = None,
+    admin: bool = False,
     now: int | None = None,
 ) -> str:
     issued = int(time.time()) if now is None else now
@@ -45,6 +47,7 @@ def issue_capability_token(
         "sub": principal,
         "scope": CAPTURE_SCOPE,
         "meetings": meetings if meetings is not None else ["*"],
+        "admin": admin,
         "iat": issued,
         "exp": issued + ttl_s,
         "jti": uuid.uuid4().hex,
@@ -73,7 +76,7 @@ def verify_capability_token(token: str, *, secret: str, algorithm: str = "HS256"
     # Fail closed: a malformed/absent claim authorizes nothing (no implicit wildcard).
     if not isinstance(meetings, list) or not all(isinstance(m, str) for m in meetings):
         raise AuthError("invalid meetings claim")
-    return Claims(principal=sub, meetings=meetings, raw=payload)
+    return Claims(principal=sub, meetings=meetings, raw=payload, admin=bool(payload.get("admin")))
 
 
 def authorize_meeting(claims: Claims, platform: str, external_meeting_id: str) -> bool:

@@ -16,8 +16,8 @@ from app.audio.frames import encode_frame
 from app.auth.tokens import issue_capability_token
 from app.config import Settings, get_settings
 from app.db.base import make_engine, make_session_factory
-from app.db.models import Meeting, Platform
-from app.jobs import retention
+from app.db.models import AudioChunk, ChunkState, Meeting, Platform, Session, SessionStatus
+from app.jobs import reconcile, retention
 from app.main import app, create_app
 
 
@@ -30,6 +30,19 @@ def _token() -> str:
 
 def _bearer() -> dict:
     return {"Authorization": "Bearer " + _token()}
+
+
+def _admin_bearer() -> dict:
+    s = get_settings()
+    token = issue_capability_token(
+        principal="admin",
+        secret=s.auth_secret,
+        algorithm=s.auth_algorithm,
+        ttl_s=60,
+        meetings=["*"],
+        admin=True,
+    )
+    return {"Authorization": "Bearer " + token}
 
 
 def _hello(ext: str, call_id: str) -> dict:
@@ -54,7 +67,9 @@ def test_erasure_removes_meeting_and_objects():
         _capture(client, ext)
         meetings = client.get("/meetings", headers=_bearer()).json()
         meeting = next(m for m in meetings if m["external_meeting_id"] == ext)
-        resp = client.delete(f"/meetings/{meeting['id']}", headers=_bearer())
+        # A capture-scoped token cannot erase (admin scope required).
+        assert client.delete(f"/meetings/{meeting['id']}", headers=_bearer()).status_code == 403
+        resp = client.delete(f"/meetings/{meeting['id']}", headers=_admin_bearer())
         assert resp.status_code == 200
         assert resp.json()["deleted"] is True
         # transcript gone (404)
@@ -117,3 +132,49 @@ def test_retention_deletes_expired():
         pytest.skip("datastores not ready")
     assert still is None  # the backdated meeting was purged
     assert deleted >= 1
+
+
+def test_reconcile_marks_orphan_pending_chunk_lost():
+    async def _run() -> object:
+        engine = make_engine(get_settings().database_url)
+        factory = make_session_factory(engine)
+        try:
+            async with factory() as db:
+                meeting = Meeting(
+                    platform=Platform.meet, external_meeting_id=f"rec-{uuid.uuid4().hex[:8]}"
+                )
+                db.add(meeting)
+                await db.flush()
+                session = Session(
+                    meeting_id=meeting.id,
+                    platform_call_id=f"rc-{uuid.uuid4().hex[:8]}",
+                    status=SessionStatus.ended,
+                    run_id="w",
+                )
+                db.add(session)
+                await db.flush()
+                chunk = AudioChunk(
+                    session_id=session.id,
+                    speaker_id="mixed",
+                    s3_key=f"orphan-{uuid.uuid4().hex[:8]}.wav",
+                    seq=0,
+                    state=ChunkState.pending,
+                    duration_s=1.0,
+                )
+                db.add(chunk)
+                await db.commit()
+                chunk_id = chunk.id
+        except Exception:  # noqa: BLE001 — DB not available
+            await engine.dispose()
+            return "skip"
+        await reconcile.run()
+        async with factory() as db:
+            refreshed = await db.get(AudioChunk, chunk_id)
+            state = refreshed.state
+        await engine.dispose()
+        return state
+
+    state = asyncio.run(_run())
+    if state == "skip":
+        pytest.skip("datastores not ready")
+    assert state == ChunkState.lost  # orphan PENDING with no object -> LOST

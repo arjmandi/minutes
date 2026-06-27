@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import aioboto3
+from botocore.exceptions import ClientError
 
 
 class SpacesStorage:
@@ -32,3 +33,14 @@ class SpacesStorage:
     async def delete(self, key: str) -> None:
         async with self._session.client("s3", **self._client_kwargs) as s3:
             await s3.delete_object(Bucket=self._bucket, Key=key)
+
+    async def head(self, key: str) -> bool:
+        async with self._session.client("s3", **self._client_kwargs) as s3:
+            try:
+                await s3.head_object(Bucket=self._bucket, Key=key)
+                return True
+            except ClientError as exc:
+                code = str(exc.response.get("Error", {}).get("Code", ""))
+                if code in ("404", "NoSuchKey", "NotFound"):
+                    return False
+                raise

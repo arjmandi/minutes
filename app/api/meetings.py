@@ -107,7 +107,11 @@ async def set_consent(
 async def erase_meeting(
     meeting_id: uuid.UUID, request: Request, claims: Claims = Depends(require_claims)
 ) -> dict:
-    """GDPR erasure: delete the meeting's audio objects, then its rows (DB cascade)."""
+    """GDPR erasure (admin scope). Delete the meeting's audio objects, then its rows (DB cascade).
+    Aborts BEFORE deleting rows if any object delete genuinely fails, so PII audio is never
+    orphaned beyond the reach of both erasure and retention."""
+    if not claims.admin:
+        raise HTTPException(status_code=403, detail="admin scope required")
     storage = request.app.state.storage
     async with request.app.state.session_factory() as db:
         meeting = await repo.get_meeting(db, meeting_id)
@@ -116,16 +120,22 @@ async def erase_meeting(
         if not authorize_meeting(claims, meeting.platform.value, meeting.external_meeting_id):
             raise HTTPException(status_code=403, detail="forbidden")
         keys = await repo.chunk_keys_for_meeting(db, meeting_id)
-    for key in keys:  # delete objects first; the row deletion below is the durable record of intent
+    failed = 0
+    for key in keys:
         try:
             await storage.delete(key)
         except Exception as exc:  # noqa: BLE001
+            failed += 1
             log.warning("erase.object_delete_failed", key=key, error=repr(exc))
+    if failed:
+        # Keep the rows (the only record of the s3_keys) so erasure can be retried / reconciled.
+        log.error("erase.partial", meeting_id=str(meeting_id), failed=failed, total=len(keys))
+        raise HTTPException(status_code=502, detail="object deletion failed; erasure not completed")
     async with request.app.state.session_factory() as db:
         deleted = await repo.delete_meeting(db, meeting_id)
         await db.commit()
     log.info("erase.done", meeting_id=str(meeting_id), objects=len(keys), deleted=deleted)
-    return {"deleted": deleted, "objects_deleted": len(keys)}
+    return {"deleted": deleted, "objects_deleted": len(keys), "objects_failed": failed}
 
 
 @router.websocket("/{meeting_id}/live")

@@ -12,3 +12,6 @@ class FakeStorage:
 
     async def delete(self, key: str) -> None:
         self.uploads.pop(key, None)
+
+    async def head(self, key: str) -> bool:
+        return key in self.uploads
