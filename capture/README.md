@@ -25,9 +25,26 @@ ingest. Auth token is passed via the `minutes.auth.bearer` subprotocol (never in
 > `getUserMedia({chromeMediaSource:"tab"})` constraints on current Chrome, the worklet resampler
 > quality, and the passthrough so the human still hears the meeting.
 
-## Part B — bot-join driver (next)
+## Part B — bot-join driver (`driver/`)
 
-A Playwright harness that launches a real (headed) Chrome with this extension + a persistent
-profile, signs the **dedicated bot Google account** in (one-time interactive login → persisted
-`storageState`), joins the invited Meet URL, and triggers capture — so capture runs unattended
-without a human clicking the popup. Teams web join follows after Meet.
+Playwright harness: launches headed Chrome with this extension + a persistent profile (the bot
+account stays signed in across runs), joins the invited Meet **or** Teams meeting, and triggers
+capture for that tab via the content script — unattended, no popup click.
+
+```bash
+cd capture/driver && npm install && npx playwright install chromium
+MINUTES_CAPTURE_TOKEN=$(curl -sXPOST localhost:8000/auth/dev-token \
+  -H 'content-type: application/json' -d '{"principal":"bot","meetings":["*"]}' \
+  | python3 -c 'import sys,json; print(json.load(sys.stdin)["token"])') \
+  node join.mjs "https://meet.google.com/abc-defg-hij"
+```
+
+The **first run** opens a login window — sign the bot account in once; the persistent profile
+(`driver/.profiles/<platform>/`) reuses it afterward. For **Teams**, pass a
+`https://teams.microsoft.com/...` URL: the bot must be invited, and for external-org meetings it
+may land in the lobby (a present host/presenter admits it — see the external-capture analysis).
+
+> ⚠️ **Needs live validation:** the join selectors and login flow per platform will need tuning
+> against the current Meet/Teams pre-join UIs. The launch + extension + profile + capture-trigger
+> plumbing is the stable core; the driver always attempts capture after a settle window even if a
+> join selector misses, so you can complete the join by hand.

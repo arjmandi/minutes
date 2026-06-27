@@ -14,18 +14,22 @@ async function ensureOffscreen() {
   });
 }
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+async function startCapture(tabId, config) {
+  const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
+  await ensureOffscreen();
+  await chrome.runtime.sendMessage({ target: "offscreen", type: "start", streamId, config });
+}
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     try {
       if (msg.type === "start") {
-        const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: msg.tabId });
-        await ensureOffscreen();
-        await chrome.runtime.sendMessage({
-          target: "offscreen",
-          type: "start",
-          streamId,
-          config: msg.config, // { backendUrl, token, platform, externalMeetingId, callId }
-        });
+        // From the popup: explicit tabId.
+        await startCapture(msg.tabId, msg.config);
+        sendResponse({ ok: true });
+      } else if (msg.type === "start-here") {
+        // From the content script (bot-join driver): capture the sender's own tab.
+        await startCapture(sender.tab?.id, msg.config);
         sendResponse({ ok: true });
       } else if (msg.type === "stop") {
         await chrome.runtime.sendMessage({ target: "offscreen", type: "stop" });

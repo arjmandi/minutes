@@ -1,0 +1,13 @@
+{
+  "name": "minutes-capture-driver",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "description": "Launches Chrome with the minutes capture extension, signs in the bot account, joins a Meet/Teams meeting, and triggers capture.",
+  "scripts": {
+    "join": "node join.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.49.0"
+  }
+}

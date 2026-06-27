@@ -17,3 +17,8 @@ minutesplan.zip
 # Local audio samples (may contain PII — never commit)
 *.m4a
 *.wav
+
+# Capture driver runtime
+node_modules/
+capture/driver/.profiles/
+capture/driver/package-lock.json
