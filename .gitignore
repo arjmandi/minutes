@@ -13,3 +13,7 @@ __pycache__/
 # Planning artifacts
 .minutesplan_extracted/
 minutesplan.zip
+
+# Local audio samples (may contain PII — never commit)
+*.m4a
+*.wav

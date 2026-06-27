@@ -1,0 +1,119 @@
+// Offscreen document: redeem the tab stream, run the audio pipeline, stream framed PCM to the
+// backend ingest WS. Wire format matches app/audio/frames.py: 13-byte LE header
+// (seq uint32, ts_ms uint64, flags uint8) + Int16 PCM (s16le). Auth via the
+// `minutes.auth.bearer` subprotocol so the token never lands in the URL.
+
+const AUTH_SUBPROTOCOL = "minutes.auth.bearer";
+
+let ctx = null;
+let ws = null;
+let node = null;
+let source = null;
+let stream = null;
+let seq = 0;
+let totalSamples = 0;
+let stopping = false;
+
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.target !== "offscreen") return;
+  if (msg.type === "start") start(msg.streamId, msg.config);
+  else if (msg.type === "stop") stop();
+});
+
+function notify(status) {
+  chrome.runtime.sendMessage({ target: "popup", type: "status", status }).catch(() => {});
+}
+
+function encodeFrame(seqNo, tsMs, int16) {
+  const buf = new ArrayBuffer(13 + int16.byteLength);
+  const dv = new DataView(buf);
+  dv.setUint32(0, seqNo >>> 0, true);
+  dv.setBigUint64(4, BigInt(Math.trunc(tsMs)), true);
+  dv.setUint8(12, 0); // flags: bit0 = gap (unused for now)
+  new Uint8Array(buf, 13).set(new Uint8Array(int16.buffer, int16.byteOffset, int16.byteLength));
+  return buf;
+}
+
+async function start(streamId, config) {
+  seq = 0;
+  totalSamples = 0;
+  stopping = false;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { mandatory: { chromeMediaSource: "tab", chromeMediaSourceId: streamId } },
+    });
+  } catch (err) {
+    notify("capture_failed:" + err);
+    return;
+  }
+
+  ctx = new AudioContext();
+  await ctx.audioWorklet.addModule("pcm-worklet.js");
+  source = ctx.createMediaStreamSource(stream);
+  node = new AudioWorkletNode(ctx, "pcm-downsampler");
+  source.connect(node);
+  source.connect(ctx.destination); // passthrough so the human still hears the meeting
+
+  ws = new WebSocket(config.backendUrl, [AUTH_SUBPROTOCOL, config.token]);
+  ws.binaryType = "arraybuffer";
+
+  ws.onopen = () => {
+    ws.send(
+      JSON.stringify({
+        type: "hello",
+        platform: config.platform,
+        external_meeting_id: config.externalMeetingId,
+        call_id: config.callId,
+      })
+    );
+  };
+
+  ws.onmessage = (ev) => {
+    let data;
+    try {
+      data = JSON.parse(ev.data);
+    } catch {
+      return;
+    }
+    if (data.type === "admitted") notify("capturing");
+    else if (data.type === "ended") {
+      notify("ended:" + data.segments);
+      cleanup();
+    } else if (["rejected", "conflict", "forbidden", "error"].includes(data.type)) {
+      notify("denied:" + (data.reason || data.type));
+      cleanup();
+    }
+  };
+
+  ws.onerror = () => notify("ws_error");
+  ws.onclose = () => {
+    if (!stopping) notify("disconnected");
+    cleanup();
+  };
+
+  node.port.onmessage = (e) => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const int16 = e.data; // Int16Array
+    const tsMs = totalSamples / 16; // 16 samples per ms at 16 kHz
+    totalSamples += int16.length;
+    ws.send(encodeFrame(seq++, tsMs, int16));
+  };
+}
+
+function stop() {
+  stopping = true;
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: "end" })); // backend finalizes, replies {"type":"ended"}
+  } else {
+    cleanup();
+  }
+}
+
+function cleanup() {
+  try { if (node) node.disconnect(); } catch {}
+  try { if (source) source.disconnect(); } catch {}
+  try { if (stream) stream.getTracks().forEach((t) => t.stop()); } catch {}
+  try { if (ctx) ctx.close(); } catch {}
+  try { if (ws) ws.close(); } catch {}
+  ctx = ws = node = source = stream = null;
+}

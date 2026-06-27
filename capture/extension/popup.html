@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body { font: 13px system-ui, sans-serif; width: 320px; padding: 10px; }
+      label { display: block; margin: 6px 0 2px; font-weight: 600; }
+      input { width: 100%; box-sizing: border-box; }
+      button { margin-top: 10px; margin-right: 6px; }
+      #status { margin-top: 10px; color: #444; white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <label>Backend ingest URL</label>
+    <input id="backendUrl" placeholder="ws://localhost:8000/ingest" />
+    <label>Capability token</label>
+    <input id="token" type="password" placeholder="paste capability token" />
+    <label>Platform</label>
+    <input id="platform" />
+    <label>Meeting id</label>
+    <input id="meetingId" />
+    <div>
+      <button id="start">Start capture</button>
+      <button id="stop">Stop</button>
+    </div>
+    <div id="status"></div>
+    <script src="popup.js"></script>
+  </body>
+</html>
