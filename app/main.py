@@ -14,6 +14,7 @@ from app.api import auth, health, ingest
 from app.config import DEV_ENVS, Settings, get_settings
 from app.db.base import make_engine, make_session_factory
 from app.logging import configure_logging, get_logger
+from app.transcribe.factory import make_transcriber_factory
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -38,6 +39,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             cap=settings.max_concurrent_calls,
             lease_ttl_s=settings.lease_ttl_s,
         )
+        app.state.transcriber_factory = make_transcriber_factory(settings)
 
         log.info("startup.complete", worker_id=worker_id, env=settings.app_env)
         try:

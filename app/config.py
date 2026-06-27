@@ -63,6 +63,7 @@ class Settings(BaseSettings):
     idle_timeout_s: int = 120
     media_inactivity_s: int = 30
     drain_deadline_s: int = 25
+    finalize_timeout_s: int = 30  # bound on awaiting the per-call pipeline during teardown
 
     # GDPR
     retention_days: int = 90

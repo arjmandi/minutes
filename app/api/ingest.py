@@ -1,40 +1,44 @@
-"""Capture-client ingest WebSocket (authenticated; vertical slice over admission).
+"""Capture-client ingest WebSocket (authenticated; drives the transcription pipeline).
 
-Auth: the client presents a capability token (preferably via the ``minutes.auth.bearer``
-subprotocol; ``?token=`` and Authorization header are fallbacks). An invalid/missing token is
-rejected at the handshake (close 1008) before accept. The token's ``meetings`` scope authorizes
-the specific meeting (per-session authorization).
+Auth: capability token via the ``minutes.auth.bearer`` subprotocol (preferred), ``?token=``, or
+Authorization header; rejected at the handshake (close 1008) before accept. The token's
+``meetings`` scope authorizes the meeting (per-session authorization).
 
-Protocol: the client sends a JSON ``hello`` ({type, platform, external_meeting_id, call_id});
-the backend admits against the distributed cap and replies ``admitted``/``rejected``/``conflict``/
-``forbidden``, then closes with a distinct code on every denial. Binary frames are PCM (dropped
-for now); any frame renews the lease (throttled). A silent client is reaped after a lease period.
+Protocol: JSON ``hello`` ({type, platform, external_meeting_id, call_id}) -> ``admitted`` /
+``rejected`` / ``conflict`` / ``forbidden``. Then binary frames (encoded PCM, see app.audio.frames)
+are decoded and fed to the per-call Session Manager; a ``{"type":"end"}`` text frame finalizes
+gracefully and the server replies ``{"type":"ended", session_id, segments}`` once persistence
+completes. Any frame renews the admission lease (throttled); a silent client is reaped.
 
-TODO(step 3+): on admit, upsert meeting/session rows (owner = principal/run_id), start Soniox +
-the chunker, and feed decoded PCM into the ClientCaptureAdapter -> Session Manager.
+Robustness: the cleanup path is non-blocking and bounded — the admission slot is always released
+and the socket always closed even if the pipeline wedges or errors.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.admission.registry import AcquireResult
+from app.audio.frames import decode_frame
 from app.auth.dependencies import ws_token
 from app.auth.tokens import AuthError, authorize_meeting, verify_capability_token
 from app.logging import get_logger
 from app.session.adapter import ClientCaptureAdapter
+from app.session.events import EndReason
+from app.session.manager import SessionManager
 
 router = APIRouter(tags=["ingest"])
 log = get_logger("ingest")
 
-# WS close codes
 _CLOSE_POLICY = 1008  # unauthorized / forbidden / conflict
 _CLOSE_PROTOCOL = 1003  # malformed hello
-_CLOSE_OVERLOAD = 1013  # at capacity (try again later)
+_CLOSE_OVERLOAD = 1013  # at capacity
 _CLOSE_INTERNAL = 1011  # unexpected backend error
+_FEED_TIMEOUT_S = 2.0
 
 
 @router.websocket("/ingest")
@@ -50,11 +54,13 @@ async def ingest_ws(ws: WebSocket) -> None:
         log.info("ingest.unauthorized", error=str(exc))
         return
 
-    # If the client offered the auth subprotocol, we must echo it on accept.
     await ws.accept(subprotocol=subprotocol)
     registry = ws.app.state.registry
     owner = registry.mint_owner()
     call_id: str | None = None
+    adapter: ClientCaptureAdapter | None = None
+    run_task: asyncio.Task | None = None
+    graceful = False
     frames = 0
     try:
         try:
@@ -95,7 +101,15 @@ async def ingest_ws(ws: WebSocket) -> None:
             return
 
         call_id = requested_call_id  # we now own a slot -> release in finally
-        ClientCaptureAdapter(platform, external_meeting_id, call_id)
+        adapter = ClientCaptureAdapter(platform, external_meeting_id, call_id)
+        manager = SessionManager(
+            session_factory=ws.app.state.session_factory,
+            redis=ws.app.state.redis,
+            transcriber_factory=ws.app.state.transcriber_factory,
+            worker_id=registry.worker_id,
+            finalize_timeout_s=settings.finalize_timeout_s,
+        )
+        run_task = asyncio.create_task(manager.run(adapter))
         await ws.send_json(
             {"type": "admitted", "call_id": call_id, "worker_id": registry.worker_id}
         )
@@ -104,6 +118,8 @@ async def ingest_ws(ws: WebSocket) -> None:
         idle_limit = max(settings.lease_ttl_s, 1)
         last_renew = time.monotonic()
         while True:
+            if run_task.done():  # pipeline ended/failed -> stop feeding
+                break
             try:
                 msg = await asyncio.wait_for(ws.receive(), timeout=idle_limit)
             except TimeoutError:
@@ -111,26 +127,69 @@ async def ingest_ws(ws: WebSocket) -> None:
                 break
             if msg["type"] == "websocket.disconnect":
                 break
-            # Any frame is liveness; renew at most every heartbeat to avoid hammering Redis.
+
+            data = msg.get("bytes")
+            if data is not None:
+                try:
+                    frame = decode_frame(data)
+                except ValueError as exc:
+                    log.warning("ingest.bad_frame", call_id=call_id, error=str(exc))
+                else:
+                    try:
+                        await asyncio.wait_for(adapter.feed(frame), timeout=_FEED_TIMEOUT_S)
+                        frames += 1
+                    except TimeoutError:
+                        if run_task.done():
+                            break  # consumer gone; stop
+            else:
+                text = msg.get("text")
+                try:
+                    control = json.loads(text) if text else {}
+                except ValueError:
+                    control = {}
+                if isinstance(control, dict) and control.get("type") == "end":
+                    graceful = True
+                    break
+
             now = time.monotonic()
             if now - last_renew >= settings.heartbeat_s:
                 if not await registry.renew(call_id, owner):
                     log.warning("ingest.lease_lost", call_id=call_id)
                     break
                 last_renew = now
-            if msg.get("bytes") is not None:
-                frames += 1  # TODO(step 3): decode + feed Session Manager
-        await _safe_close(ws)
     except WebSocketDisconnect:
         pass
     except Exception as exc:  # noqa: BLE001 — never let a backend error hang the socket
         log.error("ingest.error", call_id=call_id, error=repr(exc))
-        await _safe_close(ws, code=_CLOSE_INTERNAL)
+        graceful = False
     finally:
+        summary = None
+        if adapter is not None:
+            await adapter.end(EndReason.normal if graceful else EndReason.client_lost)
+        if run_task is not None:
+            try:
+                summary = await asyncio.wait_for(run_task, timeout=settings.finalize_timeout_s + 5)
+            except TimeoutError:
+                log.error("ingest.pipeline_timeout", call_id=call_id)
+                await asyncio.gather(run_task, return_exceptions=True)
+            except Exception as exc:  # noqa: BLE001
+                log.error("ingest.pipeline_failed", call_id=call_id, error=repr(exc))
+        if graceful and summary is not None:
+            try:
+                await ws.send_json(
+                    {
+                        "type": "ended",
+                        "session_id": summary.session_id,
+                        "segments": summary.segments,
+                    }
+                )
+            except Exception:  # noqa: BLE001
+                pass
+        await _safe_close(ws, code=1000 if graceful else _CLOSE_INTERNAL)
         if call_id:
             try:
                 await registry.release(call_id, owner)
-            except Exception as exc:  # noqa: BLE001 — best-effort; don't mask the close
+            except Exception as exc:  # noqa: BLE001
                 log.warning("ingest.release_failed", call_id=call_id, error=repr(exc))
             log.info("ingest.closed", call_id=call_id, frames=frames)
 
