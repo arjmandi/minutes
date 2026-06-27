@@ -28,3 +28,7 @@ class SpacesStorage:
         # Chunk uploads are infrequent (~ every rotation interval), so a client per call is fine.
         async with self._session.client("s3", **self._client_kwargs) as s3:
             await s3.put_object(Bucket=self._bucket, Key=key, Body=data, ContentType=content_type)
+
+    async def delete(self, key: str) -> None:
+        async with self._session.client("s3", **self._client_kwargs) as s3:
+            await s3.delete_object(Bucket=self._bucket, Key=key)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
+from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
@@ -14,6 +15,7 @@ from sqlalchemy.orm import selectinload
 from app.db.models import (
     AudioChunk,
     ChunkState,
+    ConsentStatus,
     Meeting,
     Platform,
     Session,
@@ -234,3 +236,51 @@ async def transcript_for_meeting(
         .options(selectinload(TranscriptSegment.translations))
     )
     return list(rows.scalars())
+
+
+# --- GDPR: consent, erasure, retention (spec v3 §15) ---
+
+
+async def get_meeting_by_identity(
+    db: AsyncSession, *, platform: str, external_meeting_id: str
+) -> Meeting | None:
+    return (
+        await db.execute(
+            select(Meeting).where(
+                Meeting.platform == Platform(platform),
+                Meeting.external_meeting_id == external_meeting_id,
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def set_consent(
+    db: AsyncSession, *, platform: str, external_meeting_id: str, status: ConsentStatus
+) -> Meeting:
+    meeting = await upsert_meeting(db, platform=platform, external_meeting_id=external_meeting_id)
+    meeting.consent_status = status
+    meeting.consent_captured_at = datetime.now(UTC)
+    await db.flush()
+    return meeting
+
+
+async def chunk_keys_for_meeting(db: AsyncSession, meeting_id: uuid.UUID) -> list[str]:
+    rows = await db.execute(
+        select(AudioChunk.s3_key)
+        .join(Session, AudioChunk.session_id == Session.id)
+        .where(Session.meeting_id == meeting_id)
+    )
+    return [r[0] for r in rows.all()]
+
+
+async def delete_meeting(db: AsyncSession, meeting_id: uuid.UUID) -> bool:
+    """Delete a meeting; DB FK cascade removes its sessions/segments/translations/chunks."""
+    res = await db.execute(sa_delete(Meeting).where(Meeting.id == meeting_id))
+    return res.rowcount > 0
+
+
+async def expired_meeting_ids(
+    db: AsyncSession, *, before: datetime, limit: int = 500
+) -> list[uuid.UUID]:
+    rows = await db.execute(select(Meeting.id).where(Meeting.created_at < before).limit(limit))
+    return [r[0] for r in rows.all()]

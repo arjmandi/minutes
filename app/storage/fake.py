@@ -9,3 +9,6 @@ class FakeStorage:
 
     async def upload(self, key: str, data: bytes, *, content_type: str = "audio/wav") -> None:
         self.uploads[key] = len(data)
+
+    async def delete(self, key: str) -> None:
+        self.uploads.pop(key, None)

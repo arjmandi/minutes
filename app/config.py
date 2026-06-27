@@ -72,6 +72,7 @@ class Settings(BaseSettings):
 
     # GDPR
     retention_days: int = 90
+    require_consent: bool = False  # when true, ingest refuses meetings without granted consent
 
     @model_validator(mode="after")
     def _enforce_strong_secret_outside_dev(self) -> Settings:

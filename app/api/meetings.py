@@ -14,11 +14,13 @@ import asyncio
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
 
 from app import fanout
 from app.auth.dependencies import require_claims, ws_token
 from app.auth.tokens import AuthError, Claims, authorize_meeting, verify_capability_token
 from app.db import repo
+from app.db.models import ConsentStatus
 from app.logging import get_logger
 
 router = APIRouter(prefix="/meetings", tags=["meetings"])
@@ -74,6 +76,56 @@ async def get_transcript(
             }
             for s in segments
         ]
+
+
+class ConsentBody(BaseModel):
+    platform: str
+    external_meeting_id: str
+    status: str  # one of ConsentStatus: pending | granted | denied | withdrawn
+
+
+@router.post("/consent")
+async def set_consent(
+    body: ConsentBody, request: Request, claims: Claims = Depends(require_claims)
+) -> dict:
+    """Record consent for a meeting (first-class GDPR state). Upserts the meeting if new."""
+    if not authorize_meeting(claims, body.platform, body.external_meeting_id):
+        raise HTTPException(status_code=403, detail="forbidden")
+    try:
+        status = ConsentStatus(body.status)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="invalid consent status") from exc
+    async with request.app.state.session_factory() as db:
+        meeting = await repo.set_consent(
+            db, platform=body.platform, external_meeting_id=body.external_meeting_id, status=status
+        )
+        await db.commit()
+        return {"id": str(meeting.id), "consent_status": meeting.consent_status.value}
+
+
+@router.delete("/{meeting_id}")
+async def erase_meeting(
+    meeting_id: uuid.UUID, request: Request, claims: Claims = Depends(require_claims)
+) -> dict:
+    """GDPR erasure: delete the meeting's audio objects, then its rows (DB cascade)."""
+    storage = request.app.state.storage
+    async with request.app.state.session_factory() as db:
+        meeting = await repo.get_meeting(db, meeting_id)
+        if meeting is None:
+            raise HTTPException(status_code=404, detail="not found")
+        if not authorize_meeting(claims, meeting.platform.value, meeting.external_meeting_id):
+            raise HTTPException(status_code=403, detail="forbidden")
+        keys = await repo.chunk_keys_for_meeting(db, meeting_id)
+    for key in keys:  # delete objects first; the row deletion below is the durable record of intent
+        try:
+            await storage.delete(key)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("erase.object_delete_failed", key=key, error=repr(exc))
+    async with request.app.state.session_factory() as db:
+        deleted = await repo.delete_meeting(db, meeting_id)
+        await db.commit()
+    log.info("erase.done", meeting_id=str(meeting_id), objects=len(keys), deleted=deleted)
+    return {"deleted": deleted, "objects_deleted": len(keys)}
 
 
 @router.websocket("/{meeting_id}/live")

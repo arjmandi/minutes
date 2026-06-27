@@ -26,6 +26,8 @@ from app.admission.registry import AcquireResult
 from app.audio.frames import decode_frame
 from app.auth.dependencies import ws_token
 from app.auth.tokens import AuthError, authorize_meeting, verify_capability_token
+from app.db import repo
+from app.db.models import ConsentStatus
 from app.logging import get_logger
 from app.session.adapter import ClientCaptureAdapter
 from app.session.events import EndReason
@@ -89,6 +91,16 @@ async def ingest_ws(ws: WebSocket) -> None:
             await ws.send_json({"type": "forbidden", "reason": "meeting_not_authorized"})
             await ws.close(code=_CLOSE_POLICY)
             return
+
+        if settings.require_consent:
+            async with ws.app.state.session_factory() as db:
+                meeting = await repo.get_meeting_by_identity(
+                    db, platform=platform, external_meeting_id=external_meeting_id
+                )
+            if meeting is None or meeting.consent_status != ConsentStatus.granted:
+                await ws.send_json({"type": "forbidden", "reason": "consent_required"})
+                await ws.close(code=_CLOSE_POLICY)
+                return
 
         result = await registry.acquire(requested_call_id, owner)
         if result is AcquireResult.AT_CAPACITY:
