@@ -15,6 +15,7 @@ import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
+from app import fanout
 from app.db import repo
 from app.db.models import SessionStatus
 from app.logging import get_logger
@@ -82,7 +83,10 @@ class SessionManager:
             try:
                 async for event in gen:
                     if not isinstance(event, FinalSegment):
-                        continue  # Interim -> live fan-out (build step 7), not persisted
+                        await fanout.publish(
+                            self._redis, mid, {"kind": "interim", "text": event.text}
+                        )
+                        continue  # interim is live-only, not persisted
                     try:
                         async with self._session_factory() as db:
                             seg_id = await repo.upsert_segment(
@@ -103,6 +107,19 @@ class SessionManager:
                             "session.segment_persist_failed", session_id=str(sid), error=repr(exc)
                         )
                         continue
+                    await fanout.publish(
+                        self._redis,
+                        mid,
+                        {
+                            "kind": "final",
+                            "id": str(seg_id),
+                            "text": event.text,
+                            "language": event.language,
+                            "speaker": MIXED,
+                            "start_ms": event.start_ms,
+                            "end_ms": event.end_ms,
+                        },
+                    )
                     # Hand off to translation: best-effort, non-blocking (never back-pressure STT).
                     if self._translation_targets:
                         try:
@@ -113,7 +130,7 @@ class SessionManager:
                 await gen.aclose()
             return count
 
-        async def translate_worker(translator: Translator, sid: uuid.UUID) -> None:
+        async def translate_worker(translator: Translator, mid: uuid.UUID, sid: uuid.UUID) -> None:
             while True:
                 item = await translation_q.get()
                 if item is None:
@@ -125,13 +142,25 @@ class SessionManager:
                         source_language=source_lang,
                         target_languages=self._translation_targets,
                     )
-                    if out:
-                        async with self._session_factory() as db:
-                            for target, translated in out.items():
-                                await repo.upsert_translation(
-                                    db, segment_id=seg_id, target_language=target, text=translated
-                                )
-                            await db.commit()
+                    if not out:
+                        continue
+                    async with self._session_factory() as db:
+                        for target, translated in out.items():
+                            await repo.upsert_translation(
+                                db, segment_id=seg_id, target_language=target, text=translated
+                            )
+                        await db.commit()
+                    for target, translated in out.items():
+                        await fanout.publish(
+                            self._redis,
+                            mid,
+                            {
+                                "kind": "translation",
+                                "segment_id": str(seg_id),
+                                "target": target,
+                                "text": translated,
+                            },
+                        )
                 except Exception as exc:  # noqa: BLE001 — translation is best-effort
                     log.warning("session.translate_failed", session_id=str(sid), error=repr(exc))
 
@@ -169,7 +198,7 @@ class SessionManager:
                         persist(self._transcriber_factory(None), meeting_id, session_id)
                     )
                     translate_task = asyncio.create_task(
-                        translate_worker(self._translator_factory(None), session_id)
+                        translate_worker(self._translator_factory(None), meeting_id, session_id)
                     )
                     log.info("session.started", session_id=str(session_id), call_id=event.call_id)
                 elif isinstance(event, AudioFrame):

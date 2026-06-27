@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.db.models import (
     Meeting,
@@ -167,3 +168,29 @@ async def upsert_translation(
         )
     )
     await db.execute(stmt)
+
+
+# --- read side (transcript view) ---
+
+
+async def list_recent_meetings(db: AsyncSession, *, limit: int = 100) -> list[Meeting]:
+    rows = await db.execute(select(Meeting).order_by(Meeting.created_at.desc()).limit(limit))
+    return list(rows.scalars())
+
+
+async def get_meeting(db: AsyncSession, meeting_id: uuid.UUID) -> Meeting | None:
+    return await db.get(Meeting, meeting_id)
+
+
+async def transcript_for_meeting(
+    db: AsyncSession, meeting_id: uuid.UUID, *, after_seq: int = 0
+) -> list[TranscriptSegment]:
+    """Final segments across the meeting's sessions, ordered by meeting_seq, translations eager."""
+    rows = await db.execute(
+        select(TranscriptSegment)
+        .join(Session, TranscriptSegment.session_id == Session.id)
+        .where(Session.meeting_id == meeting_id, TranscriptSegment.meeting_seq > after_seq)
+        .order_by(TranscriptSegment.meeting_seq)
+        .options(selectinload(TranscriptSegment.translations))
+    )
+    return list(rows.scalars())

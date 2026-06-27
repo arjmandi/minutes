@@ -40,5 +40,9 @@ extend-exclude = ["migrations/versions"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]
 
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI dependency-injection defaults are the framework's intended pattern, not B008 bugs.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Header", "fastapi.Path", "fastapi.Body"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

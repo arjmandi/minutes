@@ -1,0 +1,117 @@
+"""Read API + live fan-out (spec v3 §12).
+
+- GET /meetings — recent meetings the principal is authorized for.
+- GET /meetings/{id}/transcript?after=<seq> — durable final segments + translations, ordered.
+- WS  /meetings/{id}/live — relays interim/final/translation events from the meeting's Redis
+  stream. Clients backfill durable history via the transcript endpoint, then go live here.
+
+All behind the auth edge with per-meeting authorization.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import uuid
+
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
+
+from app import fanout
+from app.auth.dependencies import require_claims, ws_token
+from app.auth.tokens import AuthError, Claims, authorize_meeting, verify_capability_token
+from app.db import repo
+
+router = APIRouter(prefix="/meetings", tags=["meetings"])
+
+
+@router.get("")
+async def list_meetings(request: Request, claims: Claims = Depends(require_claims)) -> list[dict]:
+    async with request.app.state.session_factory() as db:
+        meetings = await repo.list_recent_meetings(db)
+        return [
+            {
+                "id": str(m.id),
+                "platform": m.platform.value,
+                "external_meeting_id": m.external_meeting_id,
+                "title": m.title,
+                "created_at": m.created_at.isoformat(),
+            }
+            for m in meetings
+            if authorize_meeting(claims, m.external_meeting_id)
+        ]
+
+
+@router.get("/{meeting_id}/transcript")
+async def get_transcript(
+    meeting_id: uuid.UUID,
+    request: Request,
+    after: int = 0,
+    claims: Claims = Depends(require_claims),
+) -> list[dict]:
+    async with request.app.state.session_factory() as db:
+        meeting = await repo.get_meeting(db, meeting_id)
+        if meeting is None:
+            raise HTTPException(status_code=404, detail="not found")
+        if not authorize_meeting(claims, meeting.external_meeting_id):
+            raise HTTPException(status_code=403, detail="forbidden")
+        segments = await repo.transcript_for_meeting(db, meeting_id, after_seq=after)
+        return [
+            {
+                "id": str(s.id),
+                "meeting_seq": s.meeting_seq,
+                "speaker_id": s.speaker_id,
+                "start_ts": s.start_ts,
+                "end_ts": s.end_ts,
+                "text": s.text,
+                "source_language": s.source_language,
+                "translations": [
+                    {"target_language": t.target_language, "text": t.text} for t in s.translations
+                ],
+            }
+            for s in segments
+        ]
+
+
+@router.websocket("/{meeting_id}/live")
+async def live(ws: WebSocket, meeting_id: uuid.UUID) -> None:
+    settings = ws.app.state.settings
+    token, subprotocol = ws_token(ws)
+    try:
+        claims = verify_capability_token(
+            token or "", secret=settings.auth_secret, algorithm=settings.auth_algorithm
+        )
+    except AuthError:
+        await ws.close(code=1008, reason="unauthorized")
+        return
+
+    async with ws.app.state.session_factory() as db:
+        meeting = await repo.get_meeting(db, meeting_id)
+    if meeting is None or not authorize_meeting(claims, meeting.external_meeting_id):
+        await ws.close(code=1008, reason="forbidden")
+        return
+
+    await ws.accept(subprotocol=subprotocol)
+    redis = ws.app.state.redis
+    key = fanout.stream_key(meeting_id)
+    last_id = "$"  # new events only; clients backfill durable history via the transcript endpoint
+    disconnect = asyncio.create_task(_await_disconnect(ws))
+    try:
+        while not disconnect.done():
+            resp = await redis.xread({key: last_id}, block=2000, count=100)
+            for _stream, entries in resp or []:
+                for entry_id, fields in entries:
+                    last_id = entry_id
+                    await ws.send_text(fields.get("data", "{}"))
+    except (WebSocketDisconnect, RuntimeError):
+        pass
+    finally:
+        disconnect.cancel()
+        await asyncio.gather(disconnect, return_exceptions=True)
+
+
+async def _await_disconnect(ws: WebSocket) -> None:
+    try:
+        while True:
+            if (await ws.receive())["type"] == "websocket.disconnect":
+                return
+    except (WebSocketDisconnect, RuntimeError):
+        return
