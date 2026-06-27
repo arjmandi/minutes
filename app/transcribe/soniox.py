@@ -84,9 +84,11 @@ class SonioxTranscriber:
                     raise  # cancelled teardown: do NOT send end-of-audio markers
                 else:
                     # Graceful exhaustion: flush the trailing utterance, then end-of-audio.
+                    # End-of-stream is an empty TEXT frame ("") per Soniox's own example — an
+                    # empty BINARY frame is not recognized and the server 408s on timeout.
                     try:
                         await ws.send(json.dumps({"type": "finalize"}))
-                        await ws.send(b"")
+                        await ws.send("")
                     except websockets.ConnectionClosed:
                         pass
 
