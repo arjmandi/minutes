@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse
 from redis.asyncio import Redis
 
 from app.admission.registry import CallRegistry
-from app.api import auth, health, ingest, meetings
+from app.api import auth, control, health, ingest, meetings
 from app.config import DEV_ENVS, Settings, get_settings
 from app.db.base import make_engine, make_session_factory
 from app.logging import configure_logging, get_logger
@@ -62,6 +62,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.include_router(auth.router)
     app.include_router(ingest.router)
     app.include_router(meetings.router)
+    app.include_router(control.router)
 
     web_index = Path(__file__).resolve().parent / "web" / "index.html"
 

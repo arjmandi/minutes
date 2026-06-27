@@ -11,11 +11,12 @@ returns so the ingest endpoint can release the admission slot.
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
-from app import fanout
+from app import control, fanout
 from app.audio.wav import BYTES_PER_SECOND, wrap_pcm
 from app.db import repo
 from app.db.models import ChunkState, SessionStatus
@@ -107,8 +108,12 @@ class SessionManager:
         translate_task: asyncio.Task | None = None
         fanout_task: asyncio.Task | None = None
         chunker_task: asyncio.Task | None = None
+        control_task: asyncio.Task | None = None
         segments = 0
         reason = EndReason.normal
+        # Live, runtime-mutable config (control plane, spec v3 §8). Mutated IN PLACE by the control
+        # subscriber so the persist/translate closures read the current value without nonlocal.
+        live_targets: list[str] = list(self._translation_targets)
 
         async def audio_gen() -> AsyncIterator[bytes]:
             while True:
@@ -182,7 +187,7 @@ class SessionManager:
                         )
                         continue
                     # Durable + decoupled work first, then live fan-out; all non-blocking.
-                    if self._translation_targets:
+                    if live_targets:
                         try:
                             translation_q.put_nowait((seg_id, event.text, event.language))
                         except asyncio.QueueFull:
@@ -212,7 +217,7 @@ class SessionManager:
                     out = await translator.translate(
                         text,
                         source_language=source_lang,
-                        target_languages=self._translation_targets,
+                        target_languages=list(live_targets),  # snapshot the live targets
                     )
                     if not out:
                         continue
@@ -233,6 +238,73 @@ class SessionManager:
                         )
                 except Exception as exc:  # noqa: BLE001 — translation is best-effort
                     log.warning("session.translate_failed", session_id=str(sid), error=repr(exc))
+
+        async def control_subscriber(call_id: str) -> None:
+            """Apply runtime set_config routed to this (owning) worker via Redis pub/sub.
+
+            translation_targets apply LIVE (next segment). custom_vocabulary / source_language_hints
+            are audited + staged — they take effect on the next Soniox connection; mid-stream
+            make-before-break recreate is the documented follow-up.
+            """
+            channel = control.channel_key(call_id)
+            pubsub = self._redis.pubsub()
+            await pubsub.subscribe(channel)
+            applied_gen = 0
+            # Converge to the latest audited config on subscribe: closes the subscribe-race window
+            # (a change published before we subscribed) and lets a worker taking over a reconnecting
+            # session (run_id fence) inherit prior config. Best-effort — never block the call.
+            try:
+                async with self._session_factory() as db:
+                    applied_gen, resume_targets = await repo.latest_config_state(
+                        db, session_id=session_id
+                    )
+                if resume_targets is not None:
+                    live_targets[:] = resume_targets
+                    log.info(
+                        "session.config_resumed",
+                        session_id=str(session_id),
+                        generation=applied_gen,
+                        translation_targets=live_targets,
+                    )
+            except Exception as exc:  # noqa: BLE001 — catch-up is best-effort
+                log.warning(
+                    "session.config_resume_failed", session_id=str(session_id), error=repr(exc)
+                )
+            try:
+                async for msg in pubsub.listen():
+                    if msg.get("type") != "message":
+                        continue  # skip the subscribe/unsubscribe confirmations
+                    try:
+                        cfg = json.loads(msg["data"])
+                    except (ValueError, TypeError):
+                        continue
+                    gen = cfg.get("config_generation")
+                    gen = gen if isinstance(gen, int) else 0
+                    targets = cfg.get("translation_targets")
+                    # Generation guard: only newer config wins (ignore stale/out-of-order delivery).
+                    if isinstance(targets, list) and gen > applied_gen:
+                        live_targets[:] = [t for t in targets if isinstance(t, str)]
+                        log.info(
+                            "session.config_applied",
+                            session_id=str(session_id),
+                            generation=gen,
+                            translation_targets=live_targets,
+                        )
+                    if (
+                        cfg.get("custom_vocabulary") is not None
+                        or cfg.get("source_language_hints") is not None
+                    ):
+                        log.info(
+                            "session.config_staged", session_id=str(session_id), generation=gen
+                        )
+                    applied_gen = max(applied_gen, gen)
+            finally:
+                # aclose() disconnects + releases the pooled connection (and drops the server
+                # subscription). Own try so a failed step never leaks the shared-pool connection.
+                try:
+                    await pubsub.aclose()
+                except Exception:  # noqa: BLE001 — best-effort teardown
+                    pass
 
         async def put_audio(pcm: bytes) -> bool:
             while True:
@@ -272,6 +344,7 @@ class SessionManager:
                     )
                     fanout_task = asyncio.create_task(fanout_worker(meeting_id))
                     chunker_task = asyncio.create_task(chunker_worker(session_id))
+                    control_task = asyncio.create_task(control_subscriber(event.call_id))
                     log.info("session.started", session_id=str(session_id), call_id=event.call_id)
                 elif isinstance(event, AudioFrame):
                     if not await put_audio(event.pcm):
@@ -284,6 +357,10 @@ class SessionManager:
                     reason = event.reason
                     break
         finally:
+            # Stop receiving control messages first (listen loop has no sentinel — cancel it).
+            if control_task is not None:
+                control_task.cancel()
+                await asyncio.gather(control_task, return_exceptions=True)
             if persist_task is not None and not persist_task.done():
                 _put_sentinel(audio_q)
             if persist_task is not None:

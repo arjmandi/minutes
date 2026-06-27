@@ -15,6 +15,7 @@ from sqlalchemy.orm import selectinload
 from app.db.models import (
     AudioChunk,
     ChunkState,
+    ConfigChange,
     ConsentStatus,
     Meeting,
     Platform,
@@ -246,6 +247,76 @@ async def transcript_for_meeting(
         .options(selectinload(TranscriptSegment.translations))
     )
     return list(rows.scalars())
+
+
+# --- control plane (spec v3 §8) ---
+
+
+async def get_session_by_call_id(db: AsyncSession, call_id: str) -> Session | None:
+    return (
+        await db.execute(select(Session).where(Session.platform_call_id == call_id))
+    ).scalar_one_or_none()
+
+
+async def insert_config_change(
+    db: AsyncSession,
+    *,
+    session_id: uuid.UUID,
+    scope: str,
+    source_language_hints: list[str] | None,
+    custom_vocabulary: list[str] | None,
+    translation_targets: list[str] | None,
+    actor: str,
+) -> int:
+    """Append an audited config change; returns the new monotonic config_generation."""
+    # Serialize generation assignment for this session (mirrors upsert_segment's per-row lock) so
+    # concurrent set_config cannot read the same MAX and emit a duplicate generation / lose a write.
+    await db.execute(select(Session.id).where(Session.id == session_id).with_for_update())
+    generation = await db.scalar(
+        select(func.coalesce(func.max(ConfigChange.config_generation), 0) + 1).where(
+            ConfigChange.session_id == session_id
+        )
+    )
+    vocab = {"terms": custom_vocabulary} if custom_vocabulary is not None else None
+    db.add(
+        ConfigChange(
+            session_id=session_id,
+            scope=scope,
+            source_language_hints=source_language_hints,
+            custom_vocabulary=vocab,
+            translation_targets=translation_targets,
+            actor=actor,
+            config_generation=generation,
+        )
+    )
+    await db.flush()
+    return int(generation)
+
+
+async def latest_config_state(
+    db: AsyncSession, *, session_id: uuid.UUID
+) -> tuple[int, list[str] | None]:
+    """Control-plane catch-up: (max config_generation, latest non-null translation_targets).
+
+    Lets the owning worker converge to the most recent audited config on subscribe — closing the
+    subscribe-race window and letting a worker that takes over a reconnecting session (run_id fence)
+    inherit prior config.
+    """
+    max_gen = await db.scalar(
+        select(func.coalesce(func.max(ConfigChange.config_generation), 0)).where(
+            ConfigChange.session_id == session_id
+        )
+    )
+    targets = await db.scalar(
+        select(ConfigChange.translation_targets)
+        .where(
+            ConfigChange.session_id == session_id,
+            ConfigChange.translation_targets.is_not(None),
+        )
+        .order_by(ConfigChange.config_generation.desc())
+        .limit(1)
+    )
+    return int(max_gen or 0), (list(targets) if targets is not None else None)
 
 
 # --- GDPR: consent, erasure, retention (spec v3 §15) ---
