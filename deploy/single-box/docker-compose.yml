@@ -1,0 +1,166 @@
+# Single-box deployment for "minutes" — the ENTIRE stack (Caddy edge + app + Postgres + Valkey +
+# MinIO + a cron scheduler) on ONE Hostinger KVM2 (8GB / 2 vCPU) VPS.
+#
+# Optimized for minimum cost to demonstrate the service. SPOF and data loss are ACCEPTED: a single
+# node, single-drive Postgres/MinIO, no replication, no failover, no automated backups. For an
+# HA / managed-service topology (Kubernetes + managed PG/Valkey/Spaces), see
+# ../production-deployment-notes/.
+#
+#   cp .env.example .env   # then edit
+#   docker compose up -d --build
+name: minutes-single-box
+
+x-app-build: &app-build
+  context: ../..
+  dockerfile: Dockerfile
+
+x-app-env: &app-env
+  MINUTES_APP_ENV: prod # fail-closed: refuses a weak/default MINUTES_AUTH_SECRET
+  MINUTES_RUN_MIGRATIONS: "0" # the one-shot `migrate` service owns schema upgrades
+  MINUTES_DATABASE_URL: postgresql+asyncpg://minutes:${POSTGRES_PASSWORD}@postgres:5432/minutes
+  MINUTES_REDIS_URL: redis://redis:6379/0
+  MINUTES_S3_ENABLED: "true"
+  MINUTES_S3_ENDPOINT_URL: http://minio:9000 # private network; in-box TLS unnecessary
+  MINUTES_S3_REGION: eu-central-1 # ignored by MinIO; kept EU-ish for clarity
+  MINUTES_S3_BUCKET: minutes-audio
+  MINUTES_S3_ACCESS_KEY: ${MINUTES_S3_ACCESS_KEY} # app-scoped MinIO service account, NOT root
+  MINUTES_S3_SECRET_KEY: ${MINUTES_S3_SECRET_KEY}
+  MINUTES_AUTH_SECRET: ${MINUTES_AUTH_SECRET}
+  MINUTES_SONIOX_API_KEY: ${MINUTES_SONIOX_API_KEY}
+  MINUTES_ANTHROPIC_API_KEY: ${MINUTES_ANTHROPIC_API_KEY:-}
+  MINUTES_TRANSLATION_TARGETS: ${MINUTES_TRANSLATION_TARGETS:-["de"]} # same-as-source is skipped
+  MINUTES_MAX_CONCURRENT_CALLS: ${MINUTES_MAX_CONCURRENT_CALLS:-5}
+  MINUTES_REQUIRE_CONSENT: ${MINUTES_REQUIRE_CONSENT:-true} # GDPR-safe default; override knowingly
+  MINUTES_RETENTION_DAYS: ${MINUTES_RETENTION_DAYS:-90}
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: minutes
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: minutes
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U minutes"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 1536m
+
+  redis:
+    image: valkey/valkey:8
+    restart: unless-stopped
+    # Admission slots + fan-out streams are ephemeral coordination state, not source of truth.
+    command: ["valkey-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 512m
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - miniodata:/data
+    mem_limit: 1024m
+
+  # One-shot: create the audio bucket + mint an app-scoped service account (see minio-init.sh).
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    depends_on:
+      minio:
+        condition: service_started
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINUTES_S3_ACCESS_KEY: ${MINUTES_S3_ACCESS_KEY}
+      MINUTES_S3_SECRET_KEY: ${MINUTES_S3_SECRET_KEY}
+    entrypoint: ["/bin/sh", "/minio-init.sh"]
+    volumes:
+      - ./minio-init.sh:/minio-init.sh:ro
+    restart: "no"
+
+  # One-shot: run `alembic upgrade head` once before the backend starts (no multi-replica race).
+  migrate:
+    image: minutes-backend:local
+    build: *app-build
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *app-env
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  backend:
+    image: minutes-backend:local
+    build: *app-build
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *app-env
+    expose:
+      - "8000" # internal only; Caddy terminates TLS and proxies in
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz')"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    mem_limit: 1024m
+
+  # Replaces the k8s CronJobs: orphan-chunk reconcile (every 15m) + GDPR retention purge (daily).
+  scheduler:
+    image: minutes-backend:local
+    build: *app-build
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      <<: *app-env
+    entrypoint: ["/bin/sh", "/scheduler.sh"]
+    volumes:
+      - ./scheduler.sh:/scheduler.sh:ro
+    mem_limit: 512m
+
+  # TLS-terminating, WebSocket-aware reverse proxy (auto Let's Encrypt for $DOMAIN).
+  caddy:
+    image: caddy:2.8
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    mem_limit: 256m
+
+volumes:
+  pgdata:
+  miniodata:
+  caddy_data:
+  caddy_config:

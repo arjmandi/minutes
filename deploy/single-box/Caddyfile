@@ -1,0 +1,19 @@
+# Minimal TLS-terminating, WebSocket-aware reverse proxy for the single-box deployment.
+#
+# Caddy auto-provisions a Let's Encrypt certificate for $DOMAIN and transparently proxies the
+# long-lived wss:// ingest + live-view WebSockets: it forwards the Sec-WebSocket-Protocol header
+# (where the capability token rides) unmodified and imposes no idle timeout, so meeting-length
+# sessions stay open. $DOMAIN must resolve (DNS A record) to this VPS.
+#
+# For Let's Encrypt expiry notifications, add a global options block at the top:
+#   { email you@example.com }
+
+{$DOMAIN} {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+	}
+	reverse_proxy backend:8000
+}
