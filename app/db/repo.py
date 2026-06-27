@@ -10,7 +10,14 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Meeting, Platform, Session, SessionStatus, TranscriptSegment
+from app.db.models import (
+    Meeting,
+    Platform,
+    Session,
+    SessionStatus,
+    TranscriptSegment,
+    Translation,
+)
 
 
 async def upsert_meeting(db: AsyncSession, *, platform: str, external_meeting_id: str) -> Meeting:
@@ -92,7 +99,7 @@ async def upsert_segment(
     language: str | None,
     start_ms: int | float | None,
     end_ms: int | float | None,
-) -> None:
+) -> uuid.UUID:
     """Persist a final segment with a DB-authoritative, durable meeting_seq.
 
     The sequence is computed inside the caller's transaction under a per-meeting row lock (so it
@@ -131,6 +138,32 @@ async def upsert_segment(
                 "revision": TranscriptSegment.revision + 1,
                 # meeting_seq intentionally NOT updated — ordering is fixed at first insert.
             },
+        )
+        .returning(TranscriptSegment.id)
+    )
+    return (await db.execute(stmt)).scalar_one()
+
+
+async def upsert_translation(
+    db: AsyncSession,
+    *,
+    segment_id: uuid.UUID,
+    target_language: str,
+    text: str,
+    source_revision: int = 0,
+) -> None:
+    """Persist a segment's translation; re-translation of a corrected segment UPSERTs in place."""
+    stmt = (
+        pg_insert(Translation)
+        .values(
+            segment_id=segment_id,
+            target_language=target_language,
+            text=text,
+            source_revision=source_revision,
+        )
+        .on_conflict_do_update(
+            index_elements=["segment_id", "target_language"],
+            set_={"text": text, "source_revision": source_revision},
         )
     )
     await db.execute(stmt)

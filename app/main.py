@@ -15,6 +15,7 @@ from app.config import DEV_ENVS, Settings, get_settings
 from app.db.base import make_engine, make_session_factory
 from app.logging import configure_logging, get_logger
 from app.transcribe.factory import make_transcriber_factory
+from app.translate.factory import make_translator_factory
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -40,6 +41,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             lease_ttl_s=settings.lease_ttl_s,
         )
         app.state.transcriber_factory = make_transcriber_factory(settings)
+        app.state.translator_factory = make_translator_factory(settings)
 
         log.info("startup.complete", worker_id=worker_id, env=settings.app_env)
         try:

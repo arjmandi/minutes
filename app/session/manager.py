@@ -1,10 +1,11 @@
 """Per-call Session Manager (spec v3 §13).
 
-Drives a MeetingSession adapter through transcription + persistence: upserts the meeting/session
-rows (with the worker's run_id fence), streams audio into the Transcriber over a bounded queue,
-and persists each final segment. Robustness contract: if the transcriber/DB/Redis fails mid-call,
-the producer detects the dead consumer (rather than blocking forever on the bounded queue),
-teardown is non-blocking, and ``run`` always returns so the ingest endpoint can release the slot.
+Drives a MeetingSession adapter through transcription, persistence, and downstream translation.
+Upserts meeting/session rows (run_id fence), streams audio into the Transcriber over a bounded
+queue, persists each final segment, and hands finals to a separate bounded translation worker
+(LLM, downstream — translation lag/failure never blocks STT). Robustness contract: a dead
+consumer is detected (no blocking on bounded queues), teardown is non-blocking, and ``run`` always
+returns so the ingest endpoint can release the admission slot.
 """
 
 from __future__ import annotations
@@ -21,10 +22,13 @@ from app.session.adapter import ClientCaptureAdapter
 from app.session.events import AudioFrame, EndReason, SessionEnded, SessionStarted
 from app.transcribe.base import FinalSegment, Transcriber
 from app.transcribe.factory import TranscriberFactory
+from app.translate.base import Translator
+from app.translate.factory import TranslatorFactory
 
 log = get_logger("session")
 MIXED = "mixed"
 _AUDIO_QUEUE_MAX = 256
+_TRANSLATION_QUEUE_MAX = 256
 _PUT_TIMEOUT_S = 1.0
 
 
@@ -42,12 +46,16 @@ class SessionManager:
         session_factory,
         redis,
         transcriber_factory: TranscriberFactory,
+        translator_factory: TranslatorFactory,
+        translation_targets: list[str],
         worker_id: str,
         finalize_timeout_s: int = 30,
     ) -> None:
         self._session_factory = session_factory
         self._redis = redis
         self._transcriber_factory = transcriber_factory
+        self._translator_factory = translator_factory
+        self._translation_targets = translation_targets
         self._worker_id = worker_id
         self._finalize_timeout_s = finalize_timeout_s
 
@@ -55,7 +63,9 @@ class SessionManager:
         meeting_id: uuid.UUID | None = None
         session_id: uuid.UUID | None = None
         audio_q: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=_AUDIO_QUEUE_MAX)
+        translation_q: asyncio.Queue = asyncio.Queue(maxsize=_TRANSLATION_QUEUE_MAX)
         persist_task: asyncio.Task[int] | None = None
+        translate_task: asyncio.Task | None = None
         segments = 0
         reason = EndReason.normal
 
@@ -71,35 +81,61 @@ class SessionManager:
             gen = transcriber.stream(audio_gen())
             try:
                 async for event in gen:
-                    if isinstance(event, FinalSegment):
-                        try:
-                            async with self._session_factory() as db:
-                                await repo.upsert_segment(
-                                    db,
-                                    meeting_id=mid,
-                                    session_id=sid,
-                                    speaker_id=MIXED,
-                                    utterance_id=event.utterance_id,
-                                    text=event.text,
-                                    language=event.language,
-                                    start_ms=event.start_ms,
-                                    end_ms=event.end_ms,
-                                )
-                                await db.commit()
-                            count += 1
-                        except Exception as exc:  # noqa: BLE001 — best-effort write
-                            log.warning(
-                                "session.segment_persist_failed",
-                                session_id=str(sid),
-                                error=repr(exc),
+                    if not isinstance(event, FinalSegment):
+                        continue  # Interim -> live fan-out (build step 7), not persisted
+                    try:
+                        async with self._session_factory() as db:
+                            seg_id = await repo.upsert_segment(
+                                db,
+                                meeting_id=mid,
+                                session_id=sid,
+                                speaker_id=MIXED,
+                                utterance_id=event.utterance_id,
+                                text=event.text,
+                                language=event.language,
+                                start_ms=event.start_ms,
+                                end_ms=event.end_ms,
                             )
-                    # Interim events feed live fan-out in a later build step (not persisted).
+                            await db.commit()
+                        count += 1
+                    except Exception as exc:  # noqa: BLE001 — a transient write must not kill the call
+                        log.warning(
+                            "session.segment_persist_failed", session_id=str(sid), error=repr(exc)
+                        )
+                        continue
+                    # Hand off to translation: best-effort, non-blocking (never back-pressure STT).
+                    if self._translation_targets:
+                        try:
+                            translation_q.put_nowait((seg_id, event.text, event.language))
+                        except asyncio.QueueFull:
+                            log.warning("session.translation_dropped", session_id=str(sid))
             finally:
-                await gen.aclose()  # ensure the transcriber tears down its socket/tasks
+                await gen.aclose()
             return count
 
+        async def translate_worker(translator: Translator, sid: uuid.UUID) -> None:
+            while True:
+                item = await translation_q.get()
+                if item is None:
+                    return
+                seg_id, text, source_lang = item
+                try:
+                    out = await translator.translate(
+                        text,
+                        source_language=source_lang,
+                        target_languages=self._translation_targets,
+                    )
+                    if out:
+                        async with self._session_factory() as db:
+                            for target, translated in out.items():
+                                await repo.upsert_translation(
+                                    db, segment_id=seg_id, target_language=target, text=translated
+                                )
+                            await db.commit()
+                except Exception as exc:  # noqa: BLE001 — translation is best-effort
+                    log.warning("session.translate_failed", session_id=str(sid), error=repr(exc))
+
         async def put_audio(pcm: bytes) -> bool:
-            """Enqueue audio; return False if the consumer (persist_task) has died."""
             while True:
                 if persist_task is not None and persist_task.done():
                     return False
@@ -107,7 +143,7 @@ class SessionManager:
                     await asyncio.wait_for(audio_q.put(pcm), timeout=_PUT_TIMEOUT_S)
                     return True
                 except TimeoutError:
-                    continue  # consumer alive but slow -> backpressure, retry
+                    continue
 
         try:
             async for event in adapter.events():
@@ -129,8 +165,12 @@ class SessionManager:
                         )
                         session_id = session.id
                         await db.commit()
-                    transcriber = self._transcriber_factory(None)
-                    persist_task = asyncio.create_task(persist(transcriber, meeting_id, session_id))
+                    persist_task = asyncio.create_task(
+                        persist(self._transcriber_factory(None), meeting_id, session_id)
+                    )
+                    translate_task = asyncio.create_task(
+                        translate_worker(self._translator_factory(None), session_id)
+                    )
                     log.info("session.started", session_id=str(session_id), call_id=event.call_id)
                 elif isinstance(event, AudioFrame):
                     if not await put_audio(event.pcm):
@@ -140,7 +180,7 @@ class SessionManager:
                     break
         finally:
             if persist_task is not None and not persist_task.done():
-                _put_sentinel(audio_q)  # non-blocking end-of-audio
+                _put_sentinel(audio_q)
             if persist_task is not None:
                 try:
                     segments = await asyncio.wait_for(
@@ -156,6 +196,21 @@ class SessionManager:
                         "session.transcribe_failed", session_id=str(session_id), error=repr(exc)
                     )
                     reason = EndReason.error
+            # Drain translations after transcription completes (bounded).
+            if translate_task is not None:
+                _put_sentinel(translation_q)
+                try:
+                    await asyncio.wait_for(translate_task, timeout=self._finalize_timeout_s)
+                except TimeoutError:
+                    log.error("session.translate_timeout", session_id=str(session_id))
+                    translate_task.cancel()
+                    await asyncio.gather(translate_task, return_exceptions=True)
+                except Exception as exc:  # noqa: BLE001
+                    log.error(
+                        "session.translate_drain_failed",
+                        session_id=str(session_id),
+                        error=repr(exc),
+                    )
             if session_id is not None:
                 status = SessionStatus.ended if reason == EndReason.normal else SessionStatus.failed
                 async with self._session_factory() as db:
@@ -177,16 +232,16 @@ class SessionManager:
         )
 
 
-def _put_sentinel(audio_q: asyncio.Queue[bytes | None]) -> None:
-    """Place the end-of-audio sentinel without blocking, evicting one buffered frame if full."""
+def _put_sentinel(queue: asyncio.Queue) -> None:
+    """Place the end-of-stream sentinel (None) without blocking, evicting one item if full."""
     try:
-        audio_q.put_nowait(None)
+        queue.put_nowait(None)
     except asyncio.QueueFull:
         try:
-            audio_q.get_nowait()
+            queue.get_nowait()
         except asyncio.QueueEmpty:
             pass
         try:
-            audio_q.put_nowait(None)
+            queue.put_nowait(None)
         except asyncio.QueueFull:
             pass

@@ -17,7 +17,7 @@ from app.audio.frames import encode_frame
 from app.auth.tokens import issue_capability_token
 from app.config import get_settings
 from app.db.base import make_engine, make_session_factory
-from app.db.models import TranscriptSegment
+from app.db.models import TranscriptSegment, Translation
 from app.main import app
 
 
@@ -32,18 +32,24 @@ def _token() -> str:
     )
 
 
-def _count_segments(session_id: str) -> int:
-    async def _q() -> int:
+def _counts(session_id: str) -> tuple[int, int]:
+    async def _q() -> tuple[int, int]:
         engine = make_engine(get_settings().database_url)
         factory = make_session_factory(engine)
         async with factory() as db:
-            n = await db.scalar(
+            segs = await db.scalar(
                 select(func.count())
                 .select_from(TranscriptSegment)
                 .where(TranscriptSegment.session_id == uuid.UUID(session_id))
             )
+            trans = await db.scalar(
+                select(func.count())
+                .select_from(Translation)
+                .join(TranscriptSegment, Translation.segment_id == TranscriptSegment.id)
+                .where(TranscriptSegment.session_id == uuid.UUID(session_id))
+            )
         await engine.dispose()
-        return int(n or 0)
+        return int(segs or 0), int(trans or 0)
 
     return asyncio.run(_q())
 
@@ -74,4 +80,9 @@ def test_pipeline_persists_one_segment_per_frame():
             assert ack["segments"] == 3
             session_id = ack["session_id"]
 
-    assert _count_segments(session_id) == 3
+    segs, trans = _counts(session_id)
+    assert segs == 3
+    # FakeTranscriber emits source language "en"; FakeTranslator translates each segment into
+    # each non-"en" target. So translations == segments × (non-"en" targets).
+    non_en_targets = [t for t in get_settings().translation_targets if t != "en"]
+    assert trans == 3 * len(non_en_targets)

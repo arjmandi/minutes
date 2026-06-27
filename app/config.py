@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     chunk_interval_minutes: int = 15
     language_hints: list[str] = Field(default_factory=lambda: ["en", "de", "fa"])
 
+    # Translation (LLM, downstream of finalized segments)
+    translation_model: str = "claude-haiku-4-5-20251001"
+    translation_targets: list[str] = Field(default_factory=lambda: ["en"])
+
     # Timing budget (seconds). Invariants (spec v3 §13):
     #   lease_ttl_s > max event-loop/Redis stall
     #   drain_deadline_s + upload_p99 < grace_period (set at deploy)
