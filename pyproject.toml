@@ -14,6 +14,7 @@ dependencies = [
     "redis>=5.2",
     "structlog>=24.4",
     "websockets>=13.1",
+    "pyjwt>=2.9",
 ]
 
 # Application layout (run from repo root), not a distributable package.
@@ -32,6 +33,8 @@ dev = [
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# Alembic-generated revisions are machine-written; don't hold them to hand-code style.
+extend-exclude = ["migrations/versions"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]

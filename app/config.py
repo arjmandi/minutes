@@ -6,9 +6,14 @@ All settings load from environment variables prefixed ``MINUTES_`` or a local ``
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Sentinel dev secret; the startup guard refuses it (and any <32-byte secret) outside dev.
+DEFAULT_AUTH_SECRET = "dev-insecure-change-me-please-override-in-real-envs"
+DEV_ENVS = frozenset({"local", "dev", "test"})
 
 
 class Settings(BaseSettings):
@@ -19,7 +24,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    app_env: str = "local"
+    app_env: Literal["local", "dev", "test", "staging", "prod"] = "local"
 
     # Datastores
     database_url: str = "postgresql+asyncpg://minutes:minutes@localhost:5432/minutes"
@@ -35,6 +40,12 @@ class Settings(BaseSettings):
     # External sub-processors
     soniox_api_key: str = ""
     anthropic_api_key: str = ""
+
+    # Auth edge — capability tokens (spec v3 §15). The startup guard requires a strong,
+    # non-default secret whenever app_env is not a dev env.
+    auth_secret: str = DEFAULT_AUTH_SECRET
+    auth_algorithm: Literal["HS256", "HS384", "HS512"] = "HS256"
+    auth_token_ttl_s: int = 3600
 
     # Admission control
     max_concurrent_calls: int = 5
@@ -55,6 +66,18 @@ class Settings(BaseSettings):
 
     # GDPR
     retention_days: int = 90
+
+    @model_validator(mode="after")
+    def _enforce_strong_secret_outside_dev(self) -> Settings:
+        """Fail closed: never run a non-dev env on the public default / a weak secret."""
+        if self.app_env not in DEV_ENVS and (
+            self.auth_secret == DEFAULT_AUTH_SECRET or len(self.auth_secret) < 32
+        ):
+            raise ValueError(
+                "MINUTES_AUTH_SECRET must be a strong (>=32 byte) non-default secret when "
+                f"MINUTES_APP_ENV is '{self.app_env}'. Generate one with: openssl rand -hex 32"
+            )
+        return self
 
 
 @lru_cache
