@@ -9,6 +9,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from redis.asyncio import Redis
 
 from app.admission.registry import CallRegistry
@@ -64,11 +65,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(meetings.router)
     app.include_router(control.router)
 
-    web_index = Path(__file__).resolve().parent / "web" / "index.html"
+    web_dir = Path(__file__).resolve().parent / "web"
+    app.mount("/assets", StaticFiles(directory=str(web_dir / "assets")), name="assets")
 
     @app.get("/", include_in_schema=False)
-    async def index() -> FileResponse:
-        return FileResponse(web_index)
+    async def landing() -> FileResponse:
+        return FileResponse(web_dir / "landing.html")
+
+    @app.get("/app", include_in_schema=False)
+    async def viewer() -> FileResponse:
+        return FileResponse(web_dir / "index.html")
 
     return app
 

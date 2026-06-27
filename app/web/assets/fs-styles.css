@@ -1,0 +1,629 @@
+/* ============================================================
+   Freddie Spirit Dev — Design System
+   Foundations: fonts, tokens (light + dark), base reset,
+   and component classes (fs-*).
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap');
+
+/* ------------------------------------------------------------
+   TOKENS — Light (default)
+   Warm paper surfaces, near-black warm ink, flame-orange accent
+   ------------------------------------------------------------ */
+:root {
+  /* Surfaces */
+  --fs-bg:            #F4F2EC;   /* warm paper canvas */
+  --fs-surface:       #FFFFFF;   /* cards, buttons, inputs */
+  --fs-surface-2:     #FBFAF6;   /* hover fill, subtle panels */
+  --fs-surface-3:     #F0EEE6;   /* sunken / track */
+
+  /* Ink */
+  --fs-ink:           #1B1A17;   /* primary text */
+  --fs-ink-secondary: #66645C;   /* secondary text */
+  --fs-ink-muted:     #97948A;   /* placeholder, disabled label */
+
+  /* Lines */
+  --fs-border:        #E2DFD5;   /* hairline border */
+  --fs-border-strong: #CDC9BC;   /* hover / emphasis border */
+  --fs-border-ink:    #1B1A17;   /* selected outline */
+
+  /* Accent — warm flame orange */
+  --fs-accent:        #DD5A1A;
+  --fs-accent-hover:  #C64E12;
+  --fs-accent-press:  #AC430D;
+  --fs-accent-soft:   #FBEADE;   /* tint background */
+  --fs-accent-ink:    #FFFFFF;   /* text on accent */
+  --fs-accent-ring:   rgba(221, 90, 26, 0.32);
+
+  /* Semantic */
+  --fs-success:       #2F7D4F;
+  --fs-success-soft:  #E4F1E8;
+  --fs-warning:       #B5740C;
+  --fs-warning-soft:  #F8EEDA;
+  --fs-danger:        #C0392B;
+  --fs-danger-hover:  #A52E22;
+  --fs-danger-soft:   #FBE6E3;
+  --fs-info:          #2E5AAC;
+  --fs-info-soft:     #E5ECF8;
+
+  /* Typography */
+  --fs-font-sans: 'Space Grotesk', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --fs-font-mono: 'Geist Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+
+  --fs-text-xs:   12px;
+  --fs-text-sm:   13px;
+  --fs-text-base: 14px;
+  --fs-text-md:   15px;
+  --fs-text-lg:   18px;
+  --fs-text-xl:   24px;
+  --fs-text-2xl:  32px;
+  --fs-text-3xl:  44px;
+
+  /* Radius */
+  --fs-radius-sm:   6px;
+  --fs-radius:      9px;    /* buttons, inputs */
+  --fs-radius-lg:   14px;   /* cards */
+  --fs-radius-xl:   20px;
+  --fs-radius-pill: 999px;
+
+  /* Elevation — tactile, low, warm */
+  --fs-shadow-sm: 0 1px 2px rgba(27, 26, 23, 0.06);
+  --fs-shadow:    0 1px 2px rgba(27, 26, 23, 0.07), 0 4px 12px rgba(27, 26, 23, 0.05);
+  --fs-shadow-lg: 0 2px 4px rgba(27, 26, 23, 0.06), 0 12px 32px rgba(27, 26, 23, 0.10);
+  --fs-shadow-inset: inset 0 1px 2px rgba(27, 26, 23, 0.06);
+
+  /* Motion */
+  --fs-ease: cubic-bezier(0.32, 0.72, 0, 1); /* @kind other */
+  --fs-dur:  140ms; /* @kind other */
+
+  /* Spacing scale (reference) */
+  --fs-space-1: 4px;
+  --fs-space-2: 8px;
+  --fs-space-3: 12px;
+  --fs-space-4: 16px;
+  --fs-space-5: 24px;
+  --fs-space-6: 32px;
+  --fs-space-7: 48px;
+}
+
+/* ------------------------------------------------------------
+   TOKENS — Dark
+   Apply [data-theme="dark"] on any element (or :root) to scope.
+   ------------------------------------------------------------ */
+[data-theme="dark"] {
+  --fs-bg:            #181714;
+  --fs-surface:       #232220;
+  --fs-surface-2:     #2B2A26;
+  --fs-surface-3:     #1F1E1B;
+
+  --fs-ink:           #F3F1EA;
+  --fs-ink-secondary: #A7A498;
+  --fs-ink-muted:     #76736A;
+
+  --fs-border:        #36342E;
+  --fs-border-strong: #4A483F;
+  --fs-border-ink:    #F3F1EA;
+
+  --fs-accent:        #EE6A2B;
+  --fs-accent-hover:  #F37B41;
+  --fs-accent-press:  #D75C20;
+  --fs-accent-soft:   #3A271B;
+  --fs-accent-ink:    #1B1A17;
+  --fs-accent-ring:   rgba(238, 106, 43, 0.40);
+
+  --fs-success:       #5BB47E;
+  --fs-success-soft:  #1F3328;
+  --fs-warning:       #D49A38;
+  --fs-warning-soft:  #352A16;
+  --fs-danger:        #E26A5E;
+  --fs-danger-hover:  #EC7D72;
+  --fs-danger-soft:   #3A201D;
+  --fs-info:          #6E97E0;
+  --fs-info-soft:     #1E2840;
+
+  --fs-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.40);
+  --fs-shadow:    0 1px 2px rgba(0, 0, 0, 0.45), 0 4px 12px rgba(0, 0, 0, 0.40);
+  --fs-shadow-lg: 0 2px 4px rgba(0, 0, 0, 0.45), 0 12px 32px rgba(0, 0, 0, 0.55);
+  --fs-shadow-inset: inset 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
+/* ------------------------------------------------------------
+   BASE
+   ------------------------------------------------------------ */
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--fs-bg);
+  color: var(--fs-ink);
+  font-family: var(--fs-font-sans);
+  font-size: var(--fs-text-base);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.fs-mono { font-family: var(--fs-font-mono); }
+
+/* ============================================================
+   BUTTON
+   The signature tactile control: hairline border, low shadow,
+   presses on :active, accent fill for primary, ink fill when
+   selected.
+   ============================================================ */
+.fs-btn {
+  --_pad-y: 9px;
+  --_pad-x: 16px;
+  --_fs: var(--fs-text-base);
+  --_h: 38px;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: var(--_h);
+  padding: var(--_pad-y) var(--_pad-x);
+  font-family: var(--fs-font-sans);
+  font-size: var(--_fs);
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: -0.005em;
+  color: var(--fs-ink);
+  background: var(--fs-surface);
+  border: 1px solid var(--fs-border);
+  border-radius: var(--fs-radius);
+  box-shadow: var(--fs-shadow-sm);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  transition: background var(--fs-dur) var(--fs-ease),
+              border-color var(--fs-dur) var(--fs-ease),
+              box-shadow var(--fs-dur) var(--fs-ease),
+              transform var(--fs-dur) var(--fs-ease),
+              color var(--fs-dur) var(--fs-ease);
+}
+.fs-btn:hover {
+  background: var(--fs-surface-2);
+  border-color: var(--fs-border-strong);
+}
+.fs-btn:active {
+  transform: translateY(1px);
+  box-shadow: none;
+  background: var(--fs-surface-3);
+}
+.fs-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--fs-shadow-sm), 0 0 0 3px var(--fs-accent-ring);
+  border-color: var(--fs-accent);
+}
+
+/* Sizes */
+.fs-btn--sm { --_pad-y: 6px;  --_pad-x: 12px; --_fs: var(--fs-text-sm); --_h: 32px; border-radius: var(--fs-radius-sm); }
+.fs-btn--md { /* default */ }
+.fs-btn--lg { --_pad-y: 12px; --_pad-x: 22px; --_fs: var(--fs-text-md); --_h: 48px; border-radius: var(--fs-radius); }
+
+/* Icon-only square */
+.fs-btn--icon { --_pad-x: 0; width: var(--_h); }
+
+/* Variant: primary (accent fill) */
+.fs-btn--primary {
+  background: var(--fs-accent);
+  color: var(--fs-accent-ink);
+  border-color: transparent;
+}
+.fs-btn--primary:hover { background: var(--fs-accent-hover); border-color: transparent; }
+.fs-btn--primary:active { background: var(--fs-accent-press); }
+
+/* Variant: ghost (no chrome until hover) */
+.fs-btn--ghost {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--fs-ink);
+}
+.fs-btn--ghost:hover { background: var(--fs-surface-2); border-color: transparent; }
+.fs-btn--ghost:active { background: var(--fs-surface-3); }
+
+/* Variant: danger */
+.fs-btn--danger {
+  background: var(--fs-danger);
+  color: #fff;
+  border-color: transparent;
+}
+.fs-btn--danger:hover { background: var(--fs-danger-hover); border-color: transparent; }
+
+/* Selected (toggle / segmented active) — inverts to ink fill */
+.fs-btn.is-selected {
+  background: var(--fs-ink);
+  color: var(--fs-surface);
+  border-color: var(--fs-ink);
+  box-shadow: none;
+}
+.fs-btn.is-selected:hover { background: var(--fs-ink); }
+
+/* Disabled */
+.fs-btn:disabled,
+.fs-btn.is-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+  pointer-events: none;
+}
+
+/* Loading */
+.fs-btn.is-loading { color: transparent; pointer-events: none; }
+.fs-btn.is-loading::after {
+  content: "";
+  position: absolute;
+  width: 15px; height: 15px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  color: var(--fs-ink);
+  animation: fs-spin 0.6s linear infinite;
+}
+.fs-btn--primary.is-loading::after,
+.fs-btn--danger.is-loading::after { color: #fff; }
+@keyframes fs-spin { to { transform: rotate(360deg); } }
+
+/* ============================================================
+   INPUT / TEXTAREA / SELECT
+   ============================================================ */
+.fs-field { display: inline-flex; flex-direction: column; gap: 6px; }
+.fs-field--block { display: flex; width: 100%; }
+.fs-label {
+  font-size: var(--fs-text-sm);
+  font-weight: 500;
+  color: var(--fs-ink-secondary);
+  letter-spacing: -0.005em;
+}
+.fs-hint { font-size: var(--fs-text-xs); color: var(--fs-ink-muted); }
+.fs-hint--error { color: var(--fs-danger); }
+
+.fs-input,
+.fs-textarea,
+.fs-select {
+  font-family: var(--fs-font-sans);
+  font-size: var(--fs-text-base);
+  color: var(--fs-ink);
+  background: var(--fs-surface);
+  border: 1px solid var(--fs-border);
+  border-radius: var(--fs-radius);
+  padding: 9px 12px;
+  min-height: 38px;
+  width: 100%;
+  box-shadow: var(--fs-shadow-inset);
+  transition: border-color var(--fs-dur) var(--fs-ease),
+              box-shadow var(--fs-dur) var(--fs-ease),
+              background var(--fs-dur) var(--fs-ease);
+}
+.fs-input::placeholder,
+.fs-textarea::placeholder { color: var(--fs-ink-muted); }
+.fs-input:hover,
+.fs-textarea:hover,
+.fs-select:hover { border-color: var(--fs-border-strong); }
+.fs-input:focus,
+.fs-textarea:focus,
+.fs-select:focus {
+  outline: none;
+  border-color: var(--fs-accent);
+  box-shadow: var(--fs-shadow-inset), 0 0 0 3px var(--fs-accent-ring);
+}
+.fs-input:disabled,
+.fs-textarea:disabled,
+.fs-select:disabled {
+  opacity: 0.55; cursor: not-allowed;
+  background: var(--fs-surface-3);
+}
+.fs-input.is-error,
+.fs-textarea.is-error { border-color: var(--fs-danger); }
+.fs-input.is-error:focus,
+.fs-textarea.is-error:focus { box-shadow: var(--fs-shadow-inset), 0 0 0 3px var(--fs-danger-soft); }
+
+.fs-textarea { resize: vertical; min-height: 88px; line-height: 1.5; }
+.fs-input--mono { font-family: var(--fs-font-mono); font-size: var(--fs-text-sm); }
+
+.fs-select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg width='12' height='12' viewBox='0 0 12 12' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%2366645C' stroke-width='1.3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 34px;
+  cursor: pointer;
+}
+
+/* ============================================================
+   CHIP — selectable token (openai.fm voice-chip style)
+   ============================================================ */
+.fs-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 14px;
+  font-family: var(--fs-font-sans);
+  font-size: var(--fs-text-sm);
+  font-weight: 500;
+  color: var(--fs-ink);
+  background: var(--fs-surface);
+  border: 1px solid var(--fs-border);
+  border-radius: var(--fs-radius-pill);
+  cursor: pointer;
+  user-select: none;
+  box-shadow: var(--fs-shadow-sm);
+  transition: background var(--fs-dur) var(--fs-ease),
+              border-color var(--fs-dur) var(--fs-ease),
+              color var(--fs-dur) var(--fs-ease),
+              transform var(--fs-dur) var(--fs-ease);
+}
+.fs-chip:hover { background: var(--fs-surface-2); border-color: var(--fs-border-strong); }
+.fs-chip:active { transform: translateY(1px); }
+.fs-chip:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--fs-accent-ring); border-color: var(--fs-accent); }
+.fs-chip.is-selected {
+  background: var(--fs-ink);
+  color: var(--fs-surface);
+  border-color: var(--fs-ink);
+}
+.fs-chip.is-selected .fs-chip__dot { background: var(--fs-accent); }
+.fs-chip__dot { width: 7px; height: 7px; border-radius: 50%; background: var(--fs-ink-muted); }
+.fs-chip:disabled, .fs-chip.is-disabled { opacity: 0.45; pointer-events: none; }
+
+/* ============================================================
+   SEGMENTED — exclusive control group (the .fm selector)
+   ============================================================ */
+.fs-segmented {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  background: var(--fs-surface-3);
+  border: 1px solid var(--fs-border);
+  border-radius: var(--fs-radius);
+}
+.fs-segmented__item {
+  appearance: none;
+  border: none;
+  background: transparent;
+  font-family: var(--fs-font-sans);
+  font-size: var(--fs-text-sm);
+  font-weight: 500;
+  color: var(--fs-ink-secondary);
+  padding: 6px 14px;
+  border-radius: calc(var(--fs-radius) - 4px);
+  cursor: pointer;
+  transition: background var(--fs-dur) var(--fs-ease), color var(--fs-dur) var(--fs-ease);
+}
+.fs-segmented__item:hover { color: var(--fs-ink); }
+.fs-segmented__item.is-selected {
+  background: var(--fs-surface);
+  color: var(--fs-ink);
+  box-shadow: var(--fs-shadow-sm);
+}
+.fs-segmented__item:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--fs-accent-ring); }
+
+/* ============================================================
+   SWITCH
+   ============================================================ */
+.fs-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+  font-size: var(--fs-text-base);
+  color: var(--fs-ink);
+}
+.fs-switch__track {
+  position: relative;
+  width: 42px; height: 24px;
+  background: var(--fs-surface-3);
+  border: 1px solid var(--fs-border-strong);
+  border-radius: var(--fs-radius-pill);
+  transition: background var(--fs-dur) var(--fs-ease), border-color var(--fs-dur) var(--fs-ease);
+  flex: none;
+}
+.fs-switch__thumb {
+  position: absolute;
+  top: 2px; left: 2px;
+  width: 18px; height: 18px;
+  background: var(--fs-surface);
+  border-radius: 50%;
+  box-shadow: var(--fs-shadow-sm);
+  transition: transform var(--fs-dur) var(--fs-ease);
+}
+.fs-switch.is-on .fs-switch__track { background: var(--fs-accent); border-color: transparent; }
+.fs-switch.is-on .fs-switch__thumb { transform: translateX(18px); }
+.fs-switch:focus-visible .fs-switch__track,
+.fs-switch input:focus-visible + .fs-switch__track { box-shadow: 0 0 0 3px var(--fs-accent-ring); }
+.fs-switch.is-disabled { opacity: 0.45; pointer-events: none; }
+
+/* ============================================================
+   SLIDER
+   ============================================================ */
+.fs-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 24px;
+  background: transparent;
+  cursor: pointer;
+}
+.fs-slider::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: var(--fs-radius-pill);
+  background: var(--fs-surface-3);
+  border: 1px solid var(--fs-border);
+}
+.fs-slider::-moz-range-track {
+  height: 6px;
+  border-radius: var(--fs-radius-pill);
+  background: var(--fs-surface-3);
+  border: 1px solid var(--fs-border);
+}
+.fs-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px; height: 18px;
+  margin-top: -7px;
+  border-radius: 50%;
+  background: var(--fs-surface);
+  border: 1px solid var(--fs-border-strong);
+  box-shadow: var(--fs-shadow-sm);
+  transition: border-color var(--fs-dur) var(--fs-ease), transform var(--fs-dur) var(--fs-ease);
+}
+.fs-slider::-moz-range-thumb {
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  background: var(--fs-surface);
+  border: 1px solid var(--fs-border-strong);
+  box-shadow: var(--fs-shadow-sm);
+}
+.fs-slider:hover::-webkit-slider-thumb { border-color: var(--fs-accent); }
+.fs-slider:active::-webkit-slider-thumb { transform: scale(1.08); border-color: var(--fs-accent); }
+.fs-slider:focus-visible::-webkit-slider-thumb { box-shadow: var(--fs-shadow-sm), 0 0 0 3px var(--fs-accent-ring); border-color: var(--fs-accent); }
+.fs-slider:focus { outline: none; }
+
+/* ============================================================
+   BADGE
+   ============================================================ */
+.fs-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  font-family: var(--fs-font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  border-radius: var(--fs-radius-sm);
+  border: 1px solid var(--fs-border);
+  background: var(--fs-surface-2);
+  color: var(--fs-ink-secondary);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.fs-badge--accent  { background: var(--fs-accent-soft);  color: var(--fs-accent);  border-color: transparent; }
+.fs-badge--success { background: var(--fs-success-soft); color: var(--fs-success); border-color: transparent; }
+.fs-badge--warning { background: var(--fs-warning-soft); color: var(--fs-warning); border-color: transparent; }
+.fs-badge--danger  { background: var(--fs-danger-soft);  color: var(--fs-danger);  border-color: transparent; }
+.fs-badge--info    { background: var(--fs-info-soft);    color: var(--fs-info);    border-color: transparent; }
+.fs-badge--solid   { background: var(--fs-ink); color: var(--fs-surface); border-color: transparent; }
+.fs-badge__dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+/* ============================================================
+   TOOLTIP
+   ============================================================ */
+.fs-tooltip { position: relative; display: inline-flex; }
+.fs-tooltip__bubble {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  background: var(--fs-ink);
+  color: var(--fs-surface);
+  font-family: var(--fs-font-mono);
+  font-size: 12px;
+  padding: 6px 9px;
+  border-radius: var(--fs-radius-sm);
+  white-space: nowrap;
+  box-shadow: var(--fs-shadow);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--fs-dur) var(--fs-ease), transform var(--fs-dur) var(--fs-ease);
+  z-index: 50;
+}
+.fs-tooltip__bubble::after {
+  content: "";
+  position: absolute;
+  top: 100%; left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: var(--fs-ink);
+}
+.fs-tooltip:hover .fs-tooltip__bubble,
+.fs-tooltip:focus-within .fs-tooltip__bubble {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* ============================================================
+   TABS
+   ============================================================ */
+.fs-tabs { display: flex; flex-direction: column; gap: 0; }
+.fs-tabs__list {
+  display: inline-flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--fs-border);
+}
+.fs-tab {
+  appearance: none;
+  border: none;
+  background: transparent;
+  font-family: var(--fs-font-sans);
+  font-size: var(--fs-text-base);
+  font-weight: 500;
+  color: var(--fs-ink-secondary);
+  padding: 10px 14px;
+  cursor: pointer;
+  position: relative;
+  transition: color var(--fs-dur) var(--fs-ease);
+}
+.fs-tab::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; bottom: -1px;
+  height: 2px;
+  background: transparent;
+  border-radius: 2px;
+  transition: background var(--fs-dur) var(--fs-ease);
+}
+.fs-tab:hover { color: var(--fs-ink); }
+.fs-tab.is-selected { color: var(--fs-ink); }
+.fs-tab.is-selected::after { background: var(--fs-accent); }
+.fs-tab:focus-visible { outline: none; color: var(--fs-ink); }
+.fs-tab:focus-visible::after { background: var(--fs-accent-ring); }
+
+/* ============================================================
+   CARD / PANEL
+   ============================================================ */
+.fs-card {
+  background: var(--fs-surface);
+  border: 1px solid var(--fs-border);
+  border-radius: var(--fs-radius-lg);
+  box-shadow: var(--fs-shadow-sm);
+  overflow: hidden;
+}
+.fs-card--raised { box-shadow: var(--fs-shadow); }
+.fs-card--flat   { box-shadow: none; }
+.fs-card__header {
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--fs-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.fs-card__title { font-size: var(--fs-text-md); font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+.fs-card__body { padding: 18px; }
+.fs-card__footer {
+  padding: 14px 18px;
+  border-top: 1px solid var(--fs-border);
+  background: var(--fs-surface-2);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+/* ============================================================
+   Misc helpers used by doc/card pages
+   ============================================================ */
+.fs-kbd {
+  font-family: var(--fs-font-mono);
+  font-size: 12px;
+  padding: 2px 6px;
+  border: 1px solid var(--fs-border);
+  border-bottom-width: 2px;
+  border-radius: var(--fs-radius-sm);
+  background: var(--fs-surface);
+  color: var(--fs-ink-secondary);
+}

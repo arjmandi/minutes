@@ -22,8 +22,8 @@
 </head>
 <body>
 <div id="side">
-  <label>Backend</label><input id="base" value="http://localhost:8000" />
-  <label>Token</label><input id="token" type="password" placeholder="dev capability token" />
+  <label>Backend</label><input id="base" placeholder="https://your-domain" />
+  <label>Token</label><input id="token" type="password" placeholder="capability token" />
   <button id="load">Load meetings</button>
   <div id="list"></div>
 </div>
@@ -40,6 +40,12 @@ const rtl = (l) => l === "fa";
 const base = () => $("base").value.replace(/\/$/, "");
 const token = () => $("token").value.trim();
 const auth = () => ({ headers: { Authorization: "Bearer " + token() } });
+
+// Default to this origin (served from the same backend) and remember inputs for testing.
+$("base").value = localStorage.getItem("minutes_base") || location.origin;
+$("token").value = localStorage.getItem("minutes_token") || "";
+$("base").onchange = () => localStorage.setItem("minutes_base", $("base").value);
+$("token").onchange = () => localStorage.setItem("minutes_token", $("token").value);
 
 $("load").onclick = async () => {
   const r = await fetch(base() + "/meetings", auth());
