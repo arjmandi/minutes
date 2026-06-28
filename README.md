@@ -47,8 +47,8 @@ uv run uvicorn app.main:app --reload      # serve on :8000
 uv run pytest                             # tests (need postgres + redis up)
 ```
 
-Probes: `GET /healthz` (liveness), `GET /readyz` (db + redis). Marketing landing at `/`, the
-transcript viewer at `/app`, capture ingest at `wss://…/ingest`.
+Probes: `GET /healthz` (liveness), `GET /readyz` (db + redis). Web viewer at `/` and `/app`; the
+REST + live-WebSocket API is under `/api/*`; capture ingest is the `wss://…/ingest` WebSocket.
 
 ### End-to-end test (no browser needed)
 

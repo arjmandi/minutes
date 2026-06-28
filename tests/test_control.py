@@ -87,7 +87,7 @@ def test_set_config_accepts_audits_and_increments_generation():
         _seed_active_session(ext, call_id)
 
         r1 = client.post(
-            f"/sessions/{call_id}/config",
+            f"/api/sessions/{call_id}/config",
             headers=_bearer(),
             json={"translation_targets": ["de", "es"]},
         )
@@ -95,7 +95,7 @@ def test_set_config_accepts_audits_and_increments_generation():
         assert r1.json() == {"config_generation": 1, "applied": True}
 
         r2 = client.post(
-            f"/sessions/{call_id}/config",
+            f"/api/sessions/{call_id}/config",
             headers=_bearer(),
             json={"custom_vocabulary": ["Kubernetes", "Soniox"]},
         )
@@ -105,7 +105,7 @@ def test_set_config_accepts_audits_and_increments_generation():
 
 def test_set_config_requires_auth():
     with TestClient(app) as client:
-        resp = client.post("/sessions/whatever/config", json={"translation_targets": ["de"]})
+        resp = client.post("/api/sessions/whatever/config", json={"translation_targets": ["de"]})
         assert resp.status_code == 401
 
 
@@ -118,7 +118,7 @@ def test_set_config_forbidden_for_other_meeting():
         _capture(client, ext, call_id)
         # Token scoped to a different meeting -> authz denies (cross-meeting IDOR guard).
         resp = client.post(
-            f"/sessions/{call_id}/config",
+            f"/api/sessions/{call_id}/config",
             headers=_bearer(meetings=["meet:someone-else"]),
             json={"translation_targets": ["de"]},
         )
@@ -130,7 +130,7 @@ def test_set_config_unknown_session_404():
         if client.get("/readyz").status_code != 200:
             pytest.skip("datastores not ready")
         resp = client.post(
-            f"/sessions/no-such-{uuid.uuid4().hex[:8]}/config",
+            f"/api/sessions/no-such-{uuid.uuid4().hex[:8]}/config",
             headers=_bearer(),
             json={"translation_targets": ["de"]},
         )
@@ -141,13 +141,13 @@ def test_set_config_validation_rejects_out_of_bounds():
     with TestClient(app) as client:
         # Validation runs before any lookup, so no live session is required.
         too_many = client.post(
-            "/sessions/x/config",
+            "/api/sessions/x/config",
             headers=_bearer(),
             json={"translation_targets": [f"l{i}" for i in range(11)]},
         )
         assert too_many.status_code == 422
         huge_vocab = client.post(
-            "/sessions/x/config",
+            "/api/sessions/x/config",
             headers=_bearer(),
             json={"custom_vocabulary": ["a" * 11000]},
         )
@@ -167,7 +167,7 @@ def test_set_config_publishes_to_owning_worker_channel():
         ps.subscribe(control.channel_key(call_id))  # subscribe BEFORE the publish (no backlog)
         try:
             resp = client.post(
-                f"/sessions/{call_id}/config",
+                f"/api/sessions/{call_id}/config",
                 headers=_bearer(),
                 json={"translation_targets": ["de"]},
             )
@@ -195,7 +195,7 @@ def test_set_config_rejects_ended_session():
         call_id = f"cc-{uuid.uuid4().hex[:8]}"
         _capture(client, ext, call_id)  # session is now ENDED
         resp = client.post(
-            f"/sessions/{call_id}/config",
+            f"/api/sessions/{call_id}/config",
             headers=_bearer(),
             json={"translation_targets": ["de"]},
         )

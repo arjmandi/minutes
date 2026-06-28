@@ -13,6 +13,8 @@ let stream = null;
 let seq = 0;
 let totalSamples = 0;
 let stopping = false;
+let frames = 0;
+let lastReportFrames = 0;
 
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.target !== "offscreen") return;
@@ -20,8 +22,23 @@ chrome.runtime.onMessage.addListener((msg) => {
   else if (msg.type === "stop") stop();
 });
 
-function notify(status) {
-  chrome.runtime.sendMessage({ target: "popup", type: "status", status }).catch(() => {});
+// Push status to the popup (if open) AND persist it, so a re-opened popup reflects reality.
+function setStatus(text, capturing) {
+  chrome.runtime.sendMessage({ target: "popup", type: "status", status: text }).catch(() => {});
+  try {
+    chrome.storage.local.set({ minutesCapture: { capturing, status: text, at: Date.now() } });
+  } catch {}
+}
+
+// RMS level of a frame in dBFS: ~ -90 = silence, ~ -40..-15 = speech. Lets you SEE if audio flows.
+function rmsDb(int16) {
+  let sum = 0;
+  for (let i = 0; i < int16.length; i++) {
+    const v = int16[i] / 32768;
+    sum += v * v;
+  }
+  const rms = Math.sqrt(sum / int16.length);
+  return rms > 0 ? Math.round(20 * Math.log10(rms)) : -99;
 }
 
 function encodeFrame(seqNo, tsMs, int16) {
@@ -37,13 +54,15 @@ function encodeFrame(seqNo, tsMs, int16) {
 async function start(streamId, config) {
   seq = 0;
   totalSamples = 0;
+  frames = 0;
+  lastReportFrames = 0;
   stopping = false;
   try {
     stream = await navigator.mediaDevices.getUserMedia({
       audio: { mandatory: { chromeMediaSource: "tab", chromeMediaSourceId: streamId } },
     });
   } catch (err) {
-    notify("capture_failed:" + err);
+    setStatus("capture_failed: " + err, false);
     return;
   }
 
@@ -58,6 +77,7 @@ async function start(streamId, config) {
   ws.binaryType = "arraybuffer";
 
   ws.onopen = () => {
+    setStatus("connected — waiting for admission…", true);
     ws.send(
       JSON.stringify({
         type: "hello",
@@ -75,28 +95,34 @@ async function start(streamId, config) {
     } catch {
       return;
     }
-    if (data.type === "admitted") notify("capturing");
+    if (data.type === "admitted") setStatus("capturing — 0 frames", true);
     else if (data.type === "ended") {
-      notify("ended:" + data.segments);
+      setStatus("ended · " + data.segments + " segments", false);
       cleanup();
     } else if (["rejected", "conflict", "forbidden", "error"].includes(data.type)) {
-      notify("denied:" + (data.reason || data.type));
+      setStatus("denied · " + (data.reason || data.type), false);
       cleanup();
     }
   };
 
-  ws.onerror = () => notify("ws_error");
+  ws.onerror = () => setStatus("ws_error", false);
   ws.onclose = () => {
-    if (!stopping) notify("disconnected");
+    if (!stopping) setStatus("disconnected", false);
     cleanup();
   };
 
   node.port.onmessage = (e) => {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    const int16 = e.data; // Int16Array
+    const int16 = e.data; // Int16Array, 1600 samples (100 ms @ 16 kHz)
     const tsMs = totalSamples / 16; // 16 samples per ms at 16 kHz
     totalSamples += int16.length;
     ws.send(encodeFrame(seq++, tsMs, int16));
+    frames++;
+    if (frames - lastReportFrames >= 10) {
+      // ~once per second; the dBFS makes silent-tab vs real-audio obvious.
+      lastReportFrames = frames;
+      setStatus("capturing · " + frames + " frames · " + rmsDb(int16) + " dBFS", true);
+    }
   };
 }
 
@@ -105,6 +131,7 @@ function stop() {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: "end" })); // backend finalizes, replies {"type":"ended"}
   } else {
+    setStatus("stopped", false);
     cleanup();
   }
 }

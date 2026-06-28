@@ -65,15 +65,15 @@ def test_erasure_removes_meeting_and_objects():
             pytest.skip("datastores not ready")
         ext = f"erase-{uuid.uuid4().hex[:8]}"
         _capture(client, ext)
-        meetings = client.get("/meetings", headers=_bearer()).json()
+        meetings = client.get("/api/meetings", headers=_bearer()).json()
         meeting = next(m for m in meetings if m["external_meeting_id"] == ext)
         # A capture-scoped token cannot erase (admin scope required).
-        assert client.delete(f"/meetings/{meeting['id']}", headers=_bearer()).status_code == 403
-        resp = client.delete(f"/meetings/{meeting['id']}", headers=_admin_bearer())
+        assert client.delete(f"/api/meetings/{meeting['id']}", headers=_bearer()).status_code == 403
+        resp = client.delete(f"/api/meetings/{meeting['id']}", headers=_admin_bearer())
         assert resp.status_code == 200
         assert resp.json()["deleted"] is True
         # transcript gone (404)
-        gone = client.get(f"/meetings/{meeting['id']}/transcript", headers=_bearer())
+        gone = client.get(f"/api/meetings/{meeting['id']}/transcript", headers=_bearer())
         assert gone.status_code == 404
 
 
@@ -91,7 +91,7 @@ def test_consent_gate_blocks_then_allows():
             assert msg["reason"] == "consent_required"
         # Grant consent.
         granted = client.post(
-            "/meetings/consent",
+            "/api/meetings/consent",
             headers=_bearer(),
             json={"platform": "meet", "external_meeting_id": ext, "status": "granted"},
         )

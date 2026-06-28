@@ -48,7 +48,7 @@ $("base").onchange = () => localStorage.setItem("minutes_base", $("base").value)
 $("token").onchange = () => localStorage.setItem("minutes_token", $("token").value);
 
 $("load").onclick = async () => {
-  const r = await fetch(base() + "/meetings", auth());
+  const r = await fetch(base() + "/api/meetings", auth());
   if (!r.ok) { $("list").textContent = "error " + r.status; return; }
   $("list").innerHTML = "";
   for (const m of await r.json()) {
@@ -85,9 +85,9 @@ async function openMeeting(m) {
   $("title").textContent = (m.title || m.external_meeting_id) + " — " + m.platform;
   $("segs").innerHTML = ""; $("interim").textContent = "";
   if (ws) { ws.close(); ws = null; }
-  const r = await fetch(base() + "/meetings/" + m.id + "/transcript", auth());
+  const r = await fetch(base() + "/api/meetings/" + m.id + "/transcript", auth());
   if (r.ok) for (const s of await r.json()) render(s);
-  ws = new WebSocket(base().replace(/^http/, "ws") + "/meetings/" + m.id + "/live", ["minutes.auth.bearer", token()]);
+  ws = new WebSocket(base().replace(/^http/, "ws") + "/api/meetings/" + m.id + "/live", ["minutes.auth.bearer", token()]);
   ws.onmessage = (e) => {
     const ev = JSON.parse(e.data);
     if (ev.kind === "interim") $("interim").textContent = ev.text;

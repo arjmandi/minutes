@@ -107,7 +107,7 @@ def test_malformed_meetings_rejected(meetings):
 
 def test_dev_token_mints_usable_token():
     with TestClient(app) as client:  # default app_env=local
-        resp = client.post("/auth/dev-token", json={"principal": "op", "meetings": ["m1"]})
+        resp = client.post("/api/auth/dev-token", json={"principal": "op", "meetings": ["m1"]})
         assert resp.status_code == 200
         settings = get_settings()
         claims = verify_capability_token(
@@ -120,7 +120,7 @@ def test_dev_token_mints_usable_token():
 def test_dev_token_absent_in_prod():
     prod = create_app(Settings(_env_file=None, app_env="prod", auth_secret="x" * 40))
     with TestClient(prod) as client:
-        assert client.post("/auth/dev-token", json={}).status_code == 404
+        assert client.post("/api/auth/dev-token", json={}).status_code == 404
 
 
 # --- ingest WS gating ---

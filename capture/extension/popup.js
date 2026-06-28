@@ -24,9 +24,16 @@ async function init() {
   const meeting = extractMeeting(tab?.url || "");
   $("platform").value = meeting.platform;
   $("meetingId").value = meeting.externalMeetingId;
-  const saved = await chrome.storage.local.get(["backendUrl", "token"]);
+  const saved = await chrome.storage.local.get(["backendUrl", "token", "minutesCapture"]);
   $("backendUrl").value = saved.backendUrl || "ws://localhost:8000/ingest";
   $("token").value = saved.token || "";
+  // Reflect the actual capture state across popup re-opens (the popup is a fresh page each time).
+  const cap = saved.minutesCapture;
+  if (cap?.capturing) {
+    $("status").textContent = (cap.status || "capturing") + "\n(already capturing — use Stop)";
+  } else if (cap?.status) {
+    $("status").textContent = cap.status;
+  }
 }
 
 $("start").onclick = async () => {

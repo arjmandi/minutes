@@ -4,6 +4,15 @@
 
 const OFFSCREEN_URL = "offscreen.html";
 
+// On (re)load, clear a stale "capturing" flag unless an offscreen capture is genuinely still alive.
+(async () => {
+  try {
+    if (!(await chrome.offscreen.hasDocument?.())) {
+      await chrome.storage.local.set({ minutesCapture: { capturing: false, status: "" } });
+    }
+  } catch {}
+})();
+
 async function ensureOffscreen() {
   const has = await chrome.offscreen.hasDocument?.();
   if (has) return;
@@ -15,6 +24,11 @@ async function ensureOffscreen() {
 }
 
 async function startCapture(tabId, config) {
+  // Reset any prior capture first, else getMediaStreamId throws "Cannot capture a tab with an
+  // active stream" when the offscreen doc is still holding the previous tab stream.
+  try {
+    if (await chrome.offscreen.hasDocument?.()) await chrome.offscreen.closeDocument();
+  } catch {}
   const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
   await ensureOffscreen();
   await chrome.runtime.sendMessage({ target: "offscreen", type: "start", streamId, config });

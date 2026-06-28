@@ -57,10 +57,10 @@ def test_transcript_read_authz_and_translations():
         wildcard = _token(["*"])
         _capture(client, wildcard, ext, frames=2)
 
-        meetings = client.get("/meetings", headers=_bearer(wildcard)).json()
+        meetings = client.get("/api/meetings", headers=_bearer(wildcard)).json()
         meeting = next(m for m in meetings if m["external_meeting_id"] == ext)
 
-        resp = client.get(f"/meetings/{meeting['id']}/transcript", headers=_bearer(wildcard))
+        resp = client.get(f"/api/meetings/{meeting['id']}/transcript", headers=_bearer(wildcard))
         assert resp.status_code == 200
         segs = resp.json()
         assert len(segs) == 2
@@ -73,7 +73,7 @@ def test_transcript_read_authz_and_translations():
         # Authorization: a token scoped to a different meeting can't read this one, and doesn't
         # see it listed.
         other = _token(["a-different-meeting"])
-        forbidden = client.get(f"/meetings/{meeting['id']}/transcript", headers=_bearer(other))
+        forbidden = client.get(f"/api/meetings/{meeting['id']}/transcript", headers=_bearer(other))
         assert forbidden.status_code == 403
-        listed = client.get("/meetings", headers=_bearer(other)).json()
+        listed = client.get("/api/meetings", headers=_bearer(other)).json()
         assert all(m["external_meeting_id"] != ext for m in listed)

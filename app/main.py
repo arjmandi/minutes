@@ -9,7 +9,6 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 from redis.asyncio import Redis
 
 from app.admission.registry import CallRegistry
@@ -60,21 +59,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health.router)
     # The dev token-mint surface only exists in dev environments (defense beyond the 404 guard).
     if settings.app_env in DEV_ENVS:
-        app.include_router(auth.router)
-    app.include_router(ingest.router)
-    app.include_router(meetings.router)
-    app.include_router(control.router)
+        app.include_router(auth.router, prefix="/api")  # /api/auth/dev-token (dev only)
+    app.include_router(ingest.router)  # /ingest stays at root (capture WebSocket)
+    app.include_router(meetings.router, prefix="/api")  # /api/meetings/*
+    app.include_router(control.router, prefix="/api")  # /api/sessions/*
 
-    web_dir = Path(__file__).resolve().parent / "web"
-    app.mount("/assets", StaticFiles(directory=str(web_dir / "assets")), name="assets")
+    # The product viewer is served at both / and /app. A stock self-host's root IS the app; the
+    # marketing site lives in the private deploy repo and is path-routed in front of this.
+    web_index = Path(__file__).resolve().parent / "web" / "index.html"
 
     @app.get("/", include_in_schema=False)
-    async def landing() -> FileResponse:
-        return FileResponse(web_dir / "landing.html")
+    async def root() -> FileResponse:
+        return FileResponse(web_index)
 
     @app.get("/app", include_in_schema=False)
     async def viewer() -> FileResponse:
-        return FileResponse(web_dir / "index.html")
+        return FileResponse(web_index)
 
     return app
 
