@@ -17,6 +17,8 @@ dependencies = [
     "pyjwt>=2.9",
     "anthropic>=0.40",
     "aioboto3>=13.2",
+    "argon2-cffi>=25.1.0",
+    "cryptography>=49.0.0",
 ]
 
 # Application layout (run from repo root), not a distributable package.

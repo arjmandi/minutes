@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse
 from redis.asyncio import Redis
 
 from app.admission.registry import CallRegistry
-from app.api import auth, control, health, ingest, meetings
+from app.api import accounts, auth, control, health, ingest, meetings
 from app.config import DEV_ENVS, Settings, get_settings
 from app.db.base import make_engine, make_session_factory
 from app.logging import configure_logging, get_logger
@@ -63,6 +63,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(ingest.router)  # /ingest stays at root (capture WebSocket)
     app.include_router(meetings.router, prefix="/api")  # /api/meetings/*
     app.include_router(control.router, prefix="/api")  # /api/sessions/*
+    app.include_router(accounts.router, prefix="/api")  # /api/auth/*, /api/me/*, /api/capture/token
 
     # The product viewer is served at both / and /app. A stock self-host's root IS the app; the
     # marketing site lives in the private deploy repo and is path-routed in front of this.

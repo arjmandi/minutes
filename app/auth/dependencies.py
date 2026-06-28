@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
-from fastapi import Header, HTTPException, Request, WebSocket
+import uuid
 
+import jwt
+from fastapi import Depends, Header, HTTPException, Request, WebSocket
+
+from app.auth.sessions import hash_token, verify_access_token
 from app.auth.tokens import AuthError, Claims, verify_capability_token
+from app.db import repo
+from app.db.models import TokenKind, User
 from app.logging import get_logger
 
 log = get_logger("auth")
+
+# Web session cookies (set by /api/auth/login). HttpOnly; Secure in non-dev (see accounts.py).
+SESSION_COOKIE = "mn_session"
+REFRESH_COOKIE = "mn_refresh"
 
 # Preferred WS token transport: client offers two subprotocols, [AUTH_SUBPROTOCOL, <token>].
 # Browsers can set subprotocols (new WebSocket(url, protocols)) but not headers, and unlike a
@@ -52,3 +62,54 @@ def ws_token(ws: WebSocket) -> tuple[str | None, str | None]:
     if query_token:
         return query_token, None
     return _bearer(ws.headers.get("authorization")), None
+
+
+# --- user-account auth (Chunk 2): web session cookie + extension device token ---
+
+
+async def require_user(request: Request) -> User:
+    """HTTP dependency: the current web user from the session-cookie access JWT, else 401."""
+    token = request.cookies.get(SESSION_COOKIE)
+    if not token:
+        raise HTTPException(status_code=401, detail="not authenticated")
+    settings = request.app.state.settings
+    try:
+        payload = verify_access_token(
+            token, secret=settings.auth_secret, algorithm=settings.auth_algorithm
+        )
+        user_id = uuid.UUID(payload["sub"])
+    except (jwt.PyJWTError, ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(status_code=401, detail="invalid session") from exc
+    async with request.app.state.session_factory() as db:
+        user = await repo.get_user_by_id(db, user_id)
+    # token_version mismatch => the JWT predates a password change / eviction => reject.
+    if user is None or not user.is_active or payload.get("ver") != user.token_version:
+        raise HTTPException(status_code=401, detail="no such user")
+    return user
+
+
+async def require_admin(user: User = Depends(require_user)) -> User:
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="admin required")
+    return user
+
+
+async def require_device(
+    request: Request, authorization: str | None = Header(default=None)
+) -> User:
+    """HTTP dependency for the capture extension: a valid device token (Bearer) -> its user."""
+    token = _bearer(authorization)
+    if not token:
+        raise HTTPException(status_code=401, detail="not authenticated")
+    async with request.app.state.session_factory() as db:
+        tok = await repo.get_active_auth_token(
+            db, token_hash=hash_token(token), kind=TokenKind.device
+        )
+        if tok is None:
+            raise HTTPException(status_code=401, detail="invalid device token")
+        user = await repo.get_user_by_id(db, tok.user_id)
+        await repo.touch_auth_token(db, tok)
+        await db.commit()
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=401, detail="no such user")
+    return user

@@ -118,7 +118,9 @@ def test_dev_token_mints_usable_token():
 
 
 def test_dev_token_absent_in_prod():
-    prod = create_app(Settings(_env_file=None, app_env="prod", auth_secret="x" * 40))
+    prod = create_app(
+        Settings(_env_file=None, app_env="prod", auth_secret="x" * 40, secret_key="y" * 40)
+    )
     with TestClient(prod) as client:
         assert client.post("/api/auth/dev-token", json={}).status_code == 404
 

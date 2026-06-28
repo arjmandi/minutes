@@ -13,6 +13,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Sentinel dev secret; the startup guard refuses it (and any <32-byte secret) outside dev.
 DEFAULT_AUTH_SECRET = "dev-insecure-change-me-please-override-in-real-envs"
+DEFAULT_SECRET_KEY = "dev-insecure-encryption-key-change-me-in-real-envs"
 DEV_ENVS = frozenset({"local", "dev", "test"})
 
 
@@ -48,6 +49,13 @@ class Settings(BaseSettings):
     auth_algorithm: Literal["HS256", "HS384", "HS512"] = "HS256"
     auth_token_ttl_s: int = 3600
 
+    # User auth: AES-256-GCM key for per-user provider keys + session lifetimes. Web = a short
+    # access JWT (cookie) + DB-backed refresh; the extension uses a device token.
+    secret_key: str = DEFAULT_SECRET_KEY
+    session_ttl_s: int = 900  # 15 min access JWT
+    refresh_ttl_s: int = 2592000  # 30 days web refresh
+    device_token_ttl_s: int = 2592000  # 30 days extension device token
+
     # Admission control
     max_concurrent_calls: int = 5
 
@@ -77,14 +85,17 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _enforce_strong_secret_outside_dev(self) -> Settings:
-        """Fail closed: never run a non-dev env on the public default / a weak secret."""
-        if self.app_env not in DEV_ENVS and (
-            self.auth_secret == DEFAULT_AUTH_SECRET or len(self.auth_secret) < 32
-        ):
-            raise ValueError(
-                "MINUTES_AUTH_SECRET must be a strong (>=32 byte) non-default secret when "
-                f"MINUTES_APP_ENV is '{self.app_env}'. Generate one with: openssl rand -hex 32"
-            )
+        """Fail closed: never run a non-dev env on a public-default / weak secret."""
+        if self.app_env not in DEV_ENVS:
+            for name, value, default in (
+                ("MINUTES_AUTH_SECRET", self.auth_secret, DEFAULT_AUTH_SECRET),
+                ("MINUTES_SECRET_KEY", self.secret_key, DEFAULT_SECRET_KEY),
+            ):
+                if value == default or len(value) < 32:
+                    raise ValueError(
+                        f"{name} must be a strong (>=32 byte) non-default secret when "
+                        f"MINUTES_APP_ENV is '{self.app_env}'. Generate: openssl rand -hex 32"
+                    )
         return self
 
 

@@ -14,6 +14,7 @@ from sqlalchemy.orm import selectinload
 
 from app.db.models import (
     AudioChunk,
+    AuthToken,
     ChunkState,
     ConfigChange,
     ConsentStatus,
@@ -21,8 +22,10 @@ from app.db.models import (
     Platform,
     Session,
     SessionStatus,
+    TokenKind,
     TranscriptSegment,
     Translation,
+    User,
 )
 
 
@@ -358,6 +361,94 @@ async def delete_meeting(db: AsyncSession, meeting_id: uuid.UUID) -> bool:
     """Delete a meeting; DB FK cascade removes its sessions/segments/translations/chunks."""
     res = await db.execute(sa_delete(Meeting).where(Meeting.id == meeting_id))
     return res.rowcount > 0
+
+
+# --- user accounts + session/device tokens (Chunk 2) ---
+
+
+async def create_user(
+    db: AsyncSession, *, email: str, password_hash: str, is_admin: bool = False
+) -> User:
+    user = User(email=email.lower(), password_hash=password_hash, is_admin=is_admin)
+    db.add(user)
+    await db.flush()
+    return user
+
+
+async def get_user_by_email(db: AsyncSession, email: str) -> User | None:
+    return (await db.execute(select(User).where(User.email == email.lower()))).scalar_one_or_none()
+
+
+async def get_user_by_id(db: AsyncSession, user_id: uuid.UUID) -> User | None:
+    return await db.get(User, user_id)
+
+
+async def count_users(db: AsyncSession) -> int:
+    return int(await db.scalar(select(func.count()).select_from(User)) or 0)
+
+
+async def list_users(db: AsyncSession) -> list[User]:
+    return list((await db.execute(select(User).order_by(User.created_at))).scalars())
+
+
+async def delete_user(db: AsyncSession, user_id: uuid.UUID) -> bool:
+    res = await db.execute(sa_delete(User).where(User.id == user_id))
+    return res.rowcount > 0
+
+
+async def create_auth_token(
+    db: AsyncSession, *, user_id: uuid.UUID, kind: TokenKind, token_hash: str, expires_at: datetime
+) -> AuthToken:
+    tok = AuthToken(user_id=user_id, kind=kind, token_hash=token_hash, expires_at=expires_at)
+    db.add(tok)
+    await db.flush()
+    return tok
+
+
+async def get_active_auth_token(
+    db: AsyncSession, *, token_hash: str, kind: TokenKind
+) -> AuthToken | None:
+    return (
+        await db.execute(
+            select(AuthToken).where(
+                AuthToken.token_hash == token_hash,
+                AuthToken.kind == kind,
+                AuthToken.revoked_at.is_(None),
+                AuthToken.expires_at > datetime.now(UTC),
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def get_auth_token_any(db: AsyncSession, *, token_hash: str) -> AuthToken | None:
+    """Look up a token by hash regardless of revoked/expired state (for refresh reuse-detection)."""
+    return (
+        await db.execute(select(AuthToken).where(AuthToken.token_hash == token_hash))
+    ).scalar_one_or_none()
+
+
+async def revoke_auth_token(db: AsyncSession, *, token_hash: str) -> None:
+    tok = (
+        await db.execute(select(AuthToken).where(AuthToken.token_hash == token_hash))
+    ).scalar_one_or_none()
+    if tok is not None and tok.revoked_at is None:
+        tok.revoked_at = datetime.now(UTC)
+
+
+async def touch_auth_token(db: AsyncSession, token: AuthToken) -> None:
+    token.last_used_at = datetime.now(UTC)
+
+
+async def revoke_user_tokens(
+    db: AsyncSession, *, user_id: uuid.UUID, kind: TokenKind | None = None
+) -> None:
+    """Revoke a user's active tokens (all, or one kind) — e.g. on password change / logout-all."""
+    q = select(AuthToken).where(AuthToken.user_id == user_id, AuthToken.revoked_at.is_(None))
+    if kind is not None:
+        q = q.where(AuthToken.kind == kind)
+    now = datetime.now(UTC)
+    for tok in (await db.execute(q)).scalars():
+        tok.revoked_at = now
 
 
 async def expired_meeting_ids(

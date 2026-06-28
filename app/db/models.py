@@ -58,6 +58,11 @@ class ConsentStatus(enum.StrEnum):
     withdrawn = "withdrawn"
 
 
+class TokenKind(enum.StrEnum):
+    web_refresh = "web_refresh"  # rotated DB-backed refresh token for the web session
+    device = "device"  # long-lived token for the capture extension
+
+
 def _uuid_col() -> Mapped[uuid.UUID]:
     return mapped_column(primary_key=True, default=uuid.uuid4)
 
@@ -210,3 +215,42 @@ class ConfigChange(Base):
     actor: Mapped[str | None] = mapped_column(String(256))
     config_generation: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     applied_at: Mapped[datetime] = _created_at()
+
+
+class User(Base):
+    __tablename__ = "users"
+    __table_args__ = (UniqueConstraint("email", name="uq_user_email"),)
+
+    id: Mapped[uuid.UUID] = _uuid_col()
+    email: Mapped[str] = mapped_column(String(320), nullable=False)  # stored lowercased
+    password_hash: Mapped[str] = mapped_column(Text(), nullable=False)
+    is_admin: Mapped[bool] = mapped_column(default=False, nullable=False)
+    is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
+    # Per-user provider keys, AES-GCM encrypted at rest (app/crypto.py). NULL = not set.
+    soniox_key_enc: Mapped[str | None] = mapped_column(Text())
+    anthropic_key_enc: Mapped[str | None] = mapped_column(Text())
+    # Translation defaults applied when a meeting starts (per-meeting config can override later).
+    default_translation_on: Mapped[bool] = mapped_column(default=False, nullable=False)
+    default_output_language: Mapped[str | None] = mapped_column(String(16))
+    default_model: Mapped[str | None] = mapped_column(String(128))
+    # Bumped on password change / account actions to invalidate all outstanding access JWTs.
+    token_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = _created_at()
+
+
+class AuthToken(Base):
+    """Opaque, DB-backed session tokens (hashed). Access JWTs are stateless and NOT stored here;
+    these are the revocable web-refresh + device (extension) tokens."""
+
+    __tablename__ = "auth_tokens"
+
+    id: Mapped[uuid.UUID] = _uuid_col()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    kind: Mapped[TokenKind] = mapped_column(SAEnum(TokenKind, name="token_kind"), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = _created_at()
