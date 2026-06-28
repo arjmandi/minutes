@@ -12,9 +12,12 @@ tokens — the extension mints one via /api/capture/token, which also claims the
 from __future__ import annotations
 
 import asyncio
+import re
 import uuid
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 
 from app import fanout
@@ -50,6 +53,34 @@ def _meeting_dict(m: Meeting) -> dict:
     }
 
 
+def _abs_ts(joined_at: datetime, offset: float | None) -> str | None:
+    """Absolute wall-clock time of a segment offset within its session (media epoch = joined_at)."""
+    return (joined_at + timedelta(seconds=offset)).isoformat() if offset is not None else None
+
+
+def _segment_dict(seg, joined_at: datetime) -> dict:
+    return {
+        "id": str(seg.id),
+        "meeting_seq": seg.meeting_seq,
+        "speaker_id": seg.speaker_id,
+        "start_ts": seg.start_ts,
+        "end_ts": seg.end_ts,
+        "started_at": _abs_ts(joined_at, seg.start_ts),
+        "ended_at": _abs_ts(joined_at, seg.end_ts),
+        "text": seg.text,
+        "source_language": seg.source_language,
+        "translations": [
+            {
+                "target_language": t.target_language,
+                "text": t.text,
+                "status": t.status.value,
+                "source": t.source.value,
+            }
+            for t in seg.translations
+        ],
+    }
+
+
 @router.get("")
 async def list_meetings(request: Request, user: User = Depends(require_user)) -> list[dict]:
     async with request.app.state.session_factory() as db:
@@ -68,6 +99,126 @@ async def get_meeting_detail(
         return _meeting_dict(meeting)
 
 
+class RenameBody(BaseModel):
+    title: str | None = None
+
+
+@router.put("/{meeting_id}")
+async def rename_meeting(
+    meeting_id: uuid.UUID,
+    body: RenameBody,
+    request: Request,
+    user: User = Depends(require_user),
+) -> dict:
+    """Rename a meeting (owner-or-admin)."""
+    title = body.title.strip() if body.title and body.title.strip() else None
+    async with request.app.state.session_factory() as db:
+        meeting = await repo.get_meeting(db, meeting_id)
+        if meeting is None or not _authorized(meeting, user):
+            raise HTTPException(status_code=404, detail="not found")
+        await repo.set_meeting_title(db, meeting_id=meeting_id, title=title)
+        await db.commit()
+        return _meeting_dict(await repo.get_meeting(db, meeting_id))
+
+
+async def _all_segments(db, meeting_id: uuid.UUID) -> list[tuple]:
+    """Page the full transcript (export needs every segment, not just the first page)."""
+    out: list[tuple] = []
+    after = 0
+    while True:
+        batch = await repo.transcript_for_meeting(db, meeting_id, after_seq=after, limit=1000)
+        if not batch:
+            break
+        out.extend(batch)
+        after = batch[-1][0].meeting_seq
+        if len(batch) < 1000:
+            break
+    return out
+
+
+def _export_payload(meeting: Meeting, rows: list[tuple], *, fmt, include, timestamps, lang):
+    """Render the meeting transcript/translation as txt / markdown / json (spec v3 §16)."""
+    lang = lang or meeting.translation_output_language
+    epoch = min((j for _, j in rows), default=None)
+
+    def stamp(seg, joined_at: datetime) -> str:
+        if not timestamps or epoch is None:
+            return ""
+        total = int((joined_at + timedelta(seconds=seg.start_ts or 0) - epoch).total_seconds())
+        total = max(total, 0)
+        h, rem = divmod(total, 3600)
+        m, s = divmod(rem, 60)
+        return f"[{h:02d}:{m:02d}:{s:02d}] "
+
+    def translation_of(seg) -> str:
+        if not lang:
+            return ""
+        ok = [t.text for t in seg.translations if t.target_language == lang and t.text]
+        return ok[0] if ok else ""
+
+    title = meeting.title or meeting.external_meeting_id
+
+    if fmt == "json":
+        return {
+            "meeting": _meeting_dict(meeting),
+            "segments": [_segment_dict(seg, j) for seg, j in rows],
+        }
+
+    lines: list[str] = []
+    if fmt == "md":
+        lines.append(f"# {title}")
+        lines.append(f"_{meeting.platform.value} · {meeting.external_meeting_id}_\n")
+    for seg, joined_at in rows:
+        pre = stamp(seg, joined_at)
+        spk = seg.speaker_id if seg.speaker_id and seg.speaker_id != "mixed" else ""
+        head = f"{pre}{spk + ': ' if spk else ''}"
+        if include == "transcript":
+            lines.append(f"{head}{seg.text}")
+        elif include == "translation":
+            lines.append(f"{head}{translation_of(seg)}")
+        else:  # both: source line, translation indented beneath it
+            lines.append(f"{head}{seg.text}")
+            tr = translation_of(seg)
+            if tr:
+                lines.append(f"{' ' * len(head)}{tr}")
+    return "\n".join(lines)
+
+
+@router.get("/{meeting_id}/export")
+async def export_meeting(
+    meeting_id: uuid.UUID,
+    request: Request,
+    format: str = "txt",
+    include: str = "both",
+    timestamps: bool = True,
+    lang: str | None = None,
+    user: User = Depends(require_user),
+):
+    """Export a meeting (owner-or-admin); see query params for format + included content."""
+    if format not in ("txt", "md", "json"):
+        raise HTTPException(status_code=422, detail="format must be txt, md or json")
+    if include not in ("transcript", "translation", "both"):
+        raise HTTPException(
+            status_code=422, detail="include must be transcript, translation or both"
+        )
+    async with request.app.state.session_factory() as db:
+        meeting = await repo.get_meeting(db, meeting_id)
+        if meeting is None or not _authorized(meeting, user):
+            raise HTTPException(status_code=404, detail="not found")
+        rows = await _all_segments(db, meeting_id)
+        payload = _export_payload(
+            meeting, rows, fmt=format, include=include, timestamps=timestamps, lang=lang
+        )
+    raw_stem = meeting.title or meeting.external_meeting_id or str(meeting_id)
+    # Sanitize to a safe ASCII filename (the title is user-controlled — avoid header injection).
+    stem = re.sub(r"[^A-Za-z0-9._ -]", "-", raw_stem).strip(" .-")[:80] or "meeting"
+    disp = {"Content-Disposition": f'attachment; filename="{stem}.{format}"'}
+    if format == "json":
+        return JSONResponse(payload, headers=disp)
+    media = "text/markdown" if format == "md" else "text/plain"
+    return PlainTextResponse(payload, headers=disp, media_type=media)
+
+
 @router.get("/{meeting_id}/transcript")
 async def get_transcript(
     meeting_id: uuid.UUID,
@@ -83,27 +234,7 @@ async def get_transcript(
         segments = await repo.transcript_for_meeting(
             db, meeting_id, after_seq=after, limit=min(max(limit, 1), 1000)
         )
-        return [
-            {
-                "id": str(s.id),
-                "meeting_seq": s.meeting_seq,
-                "speaker_id": s.speaker_id,
-                "start_ts": s.start_ts,
-                "end_ts": s.end_ts,
-                "text": s.text,
-                "source_language": s.source_language,
-                "translations": [
-                    {
-                        "target_language": t.target_language,
-                        "text": t.text,
-                        "status": t.status.value,
-                        "source": t.source.value,
-                    }
-                    for t in s.translations
-                ],
-            }
-            for s in segments
-        ]
+        return [_segment_dict(seg, joined_at) for seg, joined_at in segments]
 
 
 class TranslationConfigBody(BaseModel):

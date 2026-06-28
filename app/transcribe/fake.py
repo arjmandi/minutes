@@ -26,6 +26,11 @@ class FakeTranscriber:
         async for _chunk in audio:
             index += 1
             yield Interim(text=f"interim {index}")
+            # Deterministic 1s-per-segment timing so downstream timestamp/export paths run.
             yield FinalSegment(
-                text=f"utterance {index}", utterance_id=f"u{index}", language=self._language
+                text=f"utterance {index}",
+                utterance_id=f"u{index}",
+                language=self._language,
+                start_ms=(index - 1) * 1000,
+                end_ms=(index - 1) * 1000 + 800,
             )
