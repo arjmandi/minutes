@@ -22,6 +22,7 @@ from pydantic import BaseModel
 
 from app import fanout
 from app.auth.dependencies import require_user, ws_user
+from app.auth.sessions import new_opaque_token
 from app.db import repo
 from app.db.models import ConsentStatus, Meeting, TranslationSource, TranslationStatus, User
 from app.logging import get_logger
@@ -49,6 +50,26 @@ def _meeting_dict(m: Meeting) -> dict:
             "input_language": m.translation_input_language,
             "prompt": m.translation_prompt,
             "model": m.translation_model,
+        },
+        "share": {
+            "enabled": m.share_token is not None,
+            "token": m.share_token,
+            "url": f"/shared/{m.share_token}" if m.share_token else None,
+        },
+    }
+
+
+def public_meeting_dict(m: Meeting) -> dict:
+    """Curated, anonymous-safe meeting view for public share links — NEVER owner id, external
+    meeting id, consent, or the share token. Title/platform/timing + the translation language only.
+    """
+    return {
+        "title": m.title,
+        "platform": m.platform.value,
+        "created_at": m.created_at.isoformat(),
+        "translation": {
+            "enabled": m.translation_enabled,
+            "output_language": m.translation_output_language,
         },
     }
 
@@ -121,6 +142,70 @@ async def rename_meeting(
         return _meeting_dict(await repo.get_meeting(db, meeting_id))
 
 
+class ShareBody(BaseModel):
+    rotate: bool = False  # mint a fresh token even if one exists (revoke prior links)
+
+
+@router.post("/{meeting_id}/share")
+async def enable_share(
+    meeting_id: uuid.UUID,
+    request: Request,
+    body: ShareBody | None = None,
+    user: User = Depends(require_user),
+) -> dict:
+    """Enable (or rotate) a meeting's public share link (owner-or-admin). Rotating mints a fresh
+    token so previously-shared URLs stop resolving — this is how a link is revoked."""
+    rotate = bool(body and body.rotate)
+    async with request.app.state.session_factory() as db:
+        meeting = await repo.get_meeting(db, meeting_id)
+        if meeting is None or not _authorized(meeting, user):
+            raise HTTPException(status_code=404, detail="not found")
+        if meeting.share_token is None or rotate:
+            await repo.set_meeting_share_token(
+                db, meeting_id=meeting_id, share_token=new_opaque_token()
+            )
+            await db.commit()
+        return _meeting_dict(await repo.get_meeting(db, meeting_id))
+
+
+@router.delete("/{meeting_id}/share")
+async def disable_share(
+    meeting_id: uuid.UUID, request: Request, user: User = Depends(require_user)
+) -> dict:
+    """Disable a meeting's public share link (owner-or-admin); existing URLs stop resolving."""
+    async with request.app.state.session_factory() as db:
+        meeting = await repo.get_meeting(db, meeting_id)
+        if meeting is None or not _authorized(meeting, user):
+            raise HTTPException(status_code=404, detail="not found")
+        await repo.set_meeting_share_token(db, meeting_id=meeting_id, share_token=None)
+        await db.commit()
+        return _meeting_dict(await repo.get_meeting(db, meeting_id))
+
+
+def _validate_export_params(fmt: str, include: str) -> None:
+    if fmt not in ("txt", "md", "json"):
+        raise HTTPException(status_code=422, detail="format must be txt, md or json")
+    if include not in ("transcript", "translation", "both"):
+        raise HTTPException(
+            status_code=422, detail="include must be transcript, translation or both"
+        )
+
+
+def _export_response(meeting: Meeting, payload, fmt: str, *, public: bool = False):
+    """Build the download response (sanitized filename — title is user-controlled).
+
+    public=True is the anonymous share path: the filename must never fall back to the external
+    meeting id (it correlates to the real Teams/Meet call) — only the title, else a neutral name.
+    """
+    raw_stem = meeting.title or ("meeting" if public else meeting.external_meeting_id)
+    stem = re.sub(r"[^A-Za-z0-9._ -]", "-", raw_stem or "").strip(" .-")[:80] or "meeting"
+    disp = {"Content-Disposition": f'attachment; filename="{stem}.{fmt}"'}
+    if fmt == "json":
+        return JSONResponse(payload, headers=disp)
+    media = "text/markdown" if fmt == "md" else "text/plain"
+    return PlainTextResponse(payload, headers=disp, media_type=media)
+
+
 async def _all_segments(db, meeting_id: uuid.UUID) -> list[tuple]:
     """Page the full transcript (export needs every segment, not just the first page)."""
     out: list[tuple] = []
@@ -136,8 +221,15 @@ async def _all_segments(db, meeting_id: uuid.UUID) -> list[tuple]:
     return out
 
 
-def _export_payload(meeting: Meeting, rows: list[tuple], *, fmt, include, timestamps, lang):
-    """Render the meeting transcript/translation as txt / markdown / json (spec v3 §16)."""
+def _export_payload(
+    meeting: Meeting, rows: list[tuple], *, fmt, include, timestamps, lang, public: bool = False
+):
+    """Render the meeting transcript/translation as txt / markdown / json (spec v3 §16).
+
+    public=True is the anonymous share path: the JSON meeting block is the curated public view
+    (no owner id / external id / share token / private translation config) and the markdown header
+    omits the external meeting id — matching the share-link contract.
+    """
     lang = lang or meeting.translation_output_language
     epoch = min((j for _, j in rows), default=None)
 
@@ -156,18 +248,19 @@ def _export_payload(meeting: Meeting, rows: list[tuple], *, fmt, include, timest
         ok = [t.text for t in seg.translations if t.target_language == lang and t.text]
         return ok[0] if ok else ""
 
-    title = meeting.title or meeting.external_meeting_id
+    title = meeting.title or ("Meeting" if public else meeting.external_meeting_id)
 
     if fmt == "json":
         return {
-            "meeting": _meeting_dict(meeting),
+            "meeting": public_meeting_dict(meeting) if public else _meeting_dict(meeting),
             "segments": [_segment_dict(seg, j) for seg, j in rows],
         }
 
     lines: list[str] = []
     if fmt == "md":
         lines.append(f"# {title}")
-        lines.append(f"_{meeting.platform.value} · {meeting.external_meeting_id}_\n")
+        if not public:  # the external meeting id correlates to the real call — owner export only
+            lines.append(f"_{meeting.platform.value} · {meeting.external_meeting_id}_\n")
     for seg, joined_at in rows:
         pre = stamp(seg, joined_at)
         spk = seg.speaker_id if seg.speaker_id and seg.speaker_id != "mixed" else ""
@@ -195,12 +288,7 @@ async def export_meeting(
     user: User = Depends(require_user),
 ):
     """Export a meeting (owner-or-admin); see query params for format + included content."""
-    if format not in ("txt", "md", "json"):
-        raise HTTPException(status_code=422, detail="format must be txt, md or json")
-    if include not in ("transcript", "translation", "both"):
-        raise HTTPException(
-            status_code=422, detail="include must be transcript, translation or both"
-        )
+    _validate_export_params(format, include)
     async with request.app.state.session_factory() as db:
         meeting = await repo.get_meeting(db, meeting_id)
         if meeting is None or not _authorized(meeting, user):
@@ -209,14 +297,7 @@ async def export_meeting(
         payload = _export_payload(
             meeting, rows, fmt=format, include=include, timestamps=timestamps, lang=lang
         )
-    raw_stem = meeting.title or meeting.external_meeting_id or str(meeting_id)
-    # Sanitize to a safe ASCII filename (the title is user-controlled — avoid header injection).
-    stem = re.sub(r"[^A-Za-z0-9._ -]", "-", raw_stem).strip(" .-")[:80] or "meeting"
-    disp = {"Content-Disposition": f'attachment; filename="{stem}.{format}"'}
-    if format == "json":
-        return JSONResponse(payload, headers=disp)
-    media = "text/markdown" if format == "md" else "text/plain"
-    return PlainTextResponse(payload, headers=disp, media_type=media)
+    return _export_response(meeting, payload, format)
 
 
 @router.get("/{meeting_id}/transcript")

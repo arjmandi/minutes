@@ -120,6 +120,9 @@ class Meeting(Base):
     )
     translation_prompt: Mapped[str | None] = mapped_column(Text())
     translation_model: Mapped[str | None] = mapped_column(String(128))
+    # Public share link: an opaque, unguessable token grants anonymous read-only access. NULL = not
+    # shared. Revoking rotates (mint a new token) so previously-shared URLs stop resolving.
+    share_token: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
     created_at: Mapped[datetime] = _created_at()
 
     sessions: Mapped[list[Session]] = relationship(back_populates="meeting")

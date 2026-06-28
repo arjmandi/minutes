@@ -433,6 +433,24 @@ async def set_meeting_title(db: AsyncSession, *, meeting_id: uuid.UUID, title: s
     await db.execute(sa_update(Meeting).where(Meeting.id == meeting_id).values(title=title))
 
 
+async def set_meeting_share_token(
+    db: AsyncSession, *, meeting_id: uuid.UUID, share_token: str | None
+) -> None:
+    """Set/clear a meeting's public share token (caller validates ownership)."""
+    await db.execute(
+        sa_update(Meeting).where(Meeting.id == meeting_id).values(share_token=share_token)
+    )
+
+
+async def get_meeting_by_share_token(db: AsyncSession, token: str) -> Meeting | None:
+    """Resolve a meeting by its public share token (None for empty/unknown tokens)."""
+    if not token:
+        return None
+    return (
+        await db.execute(select(Meeting).where(Meeting.share_token == token))
+    ).scalar_one_or_none()
+
+
 async def transcript_for_meeting(
     db: AsyncSession, meeting_id: uuid.UUID, *, after_seq: int = 0, limit: int = 500
 ) -> list[tuple[TranscriptSegment, datetime]]:
