@@ -4,14 +4,33 @@
 
 const OFFSCREEN_URL = "offscreen.html";
 
+// Recording indicator on the toolbar icon (red ● badge while capturing).
+function setRecording(on) {
+  try {
+    chrome.action.setBadgeText({ text: on ? "●" : "" });
+    chrome.action.setBadgeBackgroundColor({ color: "#C0392B" });
+    chrome.action.setTitle({ title: on ? "minutes — recording" : "minutes capture" });
+  } catch { /* action API unavailable */ }
+}
+
 // On (re)load, clear a stale "capturing" flag unless an offscreen capture is genuinely still alive.
 (async () => {
   try {
     if (!(await chrome.offscreen.hasDocument?.())) {
       await chrome.storage.local.set({ minutesCapture: { capturing: false, status: "" } });
+      setRecording(false);
+    } else {
+      setRecording(true);
     }
-  } catch {}
+  } catch { /* ignore */ }
 })();
+
+// Keep the badge in sync with the capture flag the offscreen doc maintains.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.minutesCapture) {
+    setRecording(!!changes.minutesCapture.newValue?.capturing);
+  }
+});
 
 async function ensureOffscreen() {
   const has = await chrome.offscreen.hasDocument?.();
@@ -46,7 +65,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         await startCapture(sender.tab?.id, msg.config);
         sendResponse({ ok: true });
       } else if (msg.type === "stop") {
-        await chrome.runtime.sendMessage({ target: "offscreen", type: "stop" });
+        await chrome.runtime.sendMessage({ target: "offscreen", type: "stop" }).catch(() => {});
+        setRecording(false);
         sendResponse({ ok: true });
       }
     } catch (err) {
