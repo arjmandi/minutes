@@ -22,10 +22,11 @@ import sys
 import wave
 from pathlib import Path
 
+import websockets
+
 # make the repo root importable so `app.*` resolves when run directly
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import websockets  # noqa: E402
 from app.audio.frames import encode_frame  # noqa: E402
 
 _RATE = 16000
@@ -74,7 +75,7 @@ async def stream(url: str, wav_path: str, platform: str, meeting: str, token: st
         try:
             while True:
                 print("server ->", await asyncio.wait_for(ws.recv(), timeout=15))
-        except (asyncio.TimeoutError, websockets.ConnectionClosed):
+        except (TimeoutError, websockets.ConnectionClosed):
             pass
 
 
