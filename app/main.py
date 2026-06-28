@@ -9,6 +9,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from redis.asyncio import Redis
 
 from app.admission.registry import CallRegistry
@@ -67,9 +68,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(uploads.router, prefix="/api")  # /api/uploads/*
     app.include_router(shared.router, prefix="/api")  # /api/shared/* (anonymous public read)
 
-    # The product viewer is served at both / and /app. A stock self-host's root IS the app; the
-    # marketing site lives in the private deploy repo and is path-routed in front of this.
-    web_index = Path(__file__).resolve().parent / "web" / "index.html"
+    # The product SPA is served at / and /app; its static assets (CSS/JS) at /assets. A stock
+    # self-host's root IS the app; the marketing site lives in the private deploy repo and is
+    # path-routed in front of this.
+    web_dir = Path(__file__).resolve().parent / "web"
+    web_index = web_dir / "index.html"
+    app.mount("/assets", StaticFiles(directory=web_dir / "assets"), name="assets")
 
     @app.get("/", include_in_schema=False)
     async def root() -> FileResponse:
@@ -77,6 +81,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/app", include_in_schema=False)
     async def viewer() -> FileResponse:
+        return FileResponse(web_index)
+
+    # Public share-link viewer: the SPA reads the token from the path and calls /api/shared/*.
+    @app.get("/shared/{token}", include_in_schema=False)
+    async def shared_viewer(token: str) -> FileResponse:
         return FileResponse(web_index)
 
     return app

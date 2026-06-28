@@ -1,100 +1,24 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>minutes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link
+  href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap"
+  rel="stylesheet"
+/>
+<link rel="stylesheet" href="/assets/fs-styles.css" />
+<link rel="stylesheet" href="/assets/app-kit.css" />
 <style>
- body{font:14px system-ui,sans-serif;margin:0;display:flex;height:100vh}
- #side{width:300px;border-right:1px solid #ddd;padding:12px;overflow:auto}
- #main{flex:1;padding:12px;overflow:auto}
- label{display:block;font-weight:600;margin-top:8px}
- input{width:100%;box-sizing:border-box;margin:2px 0}
- button{margin-top:8px}
- .m{padding:6px;cursor:pointer;border-radius:4px}
- .m:hover{background:#f1f1f1}
- .seg{margin:8px 0;padding:6px 8px;border-left:3px solid #4a90d9}
- .seg[dir=rtl]{border-left:0;border-right:3px solid #4a90d9}
- .tx{font-weight:600}
- .tr{color:#666;margin-left:10px}
- #interim{color:#999;font-style:italic;min-height:1.3em;margin-top:8px}
- small{color:#999}
+  html, body { height: 100%; margin: 0; }
+  #root { height: 100%; }
 </style>
 </head>
 <body>
-<div id="side">
-  <label>Backend</label><input id="base" placeholder="https://your-domain" />
-  <label>Token</label><input id="token" type="password" placeholder="capability token" />
-  <button id="load">Load meetings</button>
-  <div id="list"></div>
-</div>
-<div id="main">
-  <h3 id="title">Select a meeting</h3>
-  <div id="segs"></div>
-  <div id="interim"></div>
-</div>
-<script>
-const $ = (id) => document.getElementById(id);
-let ws = null;
-const esc = (s) => (s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
-const rtl = (l) => l === "fa";
-const base = () => $("base").value.replace(/\/$/, "");
-const token = () => $("token").value.trim();
-const auth = () => ({ headers: { Authorization: "Bearer " + token() } });
-
-// Default to this origin (served from the same backend) and remember inputs for testing.
-$("base").value = localStorage.getItem("minutes_base") || location.origin;
-$("token").value = localStorage.getItem("minutes_token") || "";
-$("base").onchange = () => localStorage.setItem("minutes_base", $("base").value);
-$("token").onchange = () => localStorage.setItem("minutes_token", $("token").value);
-
-$("load").onclick = async () => {
-  const r = await fetch(base() + "/api/meetings", auth());
-  if (!r.ok) { $("list").textContent = "error " + r.status; return; }
-  $("list").innerHTML = "";
-  for (const m of await r.json()) {
-    const d = document.createElement("div");
-    d.className = "m";
-    d.textContent = (m.title || m.external_meeting_id) + " (" + m.platform + ")";
-    d.onclick = () => openMeeting(m);
-    $("list").appendChild(d);
-  }
-};
-
-function render(seg) {
-  const el = document.createElement("div");
-  el.className = "seg";
-  if (rtl(seg.source_language)) el.dir = "rtl";
-  el.dataset.id = seg.id;
-  let html = '<span class="tx">' + esc(seg.text) + '</span> <small>[' + esc(seg.source_language || "?") + "]</small>";
-  for (const t of seg.translations || []) html += '<div class="tr">→ ' + esc(t.target_language) + ": " + esc(t.text) + "</div>";
-  el.innerHTML = html;
-  const existing = $("segs").querySelector('[data-id="' + seg.id + '"]');
-  if (existing) existing.replaceWith(el); else $("segs").appendChild(el);
-}
-
-function addTranslation(ev) {
-  const el = $("segs").querySelector('[data-id="' + ev.segment_id + '"]');
-  if (!el) return;
-  const d = document.createElement("div");
-  d.className = "tr";
-  d.textContent = "→ " + ev.target + ": " + ev.text;
-  el.appendChild(d);
-}
-
-async function openMeeting(m) {
-  $("title").textContent = (m.title || m.external_meeting_id) + " — " + m.platform;
-  $("segs").innerHTML = ""; $("interim").textContent = "";
-  if (ws) { ws.close(); ws = null; }
-  const r = await fetch(base() + "/api/meetings/" + m.id + "/transcript", auth());
-  if (r.ok) for (const s of await r.json()) render(s);
-  ws = new WebSocket(base().replace(/^http/, "ws") + "/api/meetings/" + m.id + "/live", ["minutes.auth.bearer", token()]);
-  ws.onmessage = (e) => {
-    const ev = JSON.parse(e.data);
-    if (ev.kind === "interim") $("interim").textContent = ev.text;
-    else if (ev.kind === "final") { $("interim").textContent = ""; render({ id: ev.id, text: ev.text, source_language: ev.language, translations: [] }); }
-    else if (ev.kind === "translation") addTranslation(ev);
-  };
-}
-</script>
+<div id="root" class="m-app"></div>
+<script src="/assets/app.js"></script>
 </body>
 </html>
