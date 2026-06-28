@@ -1,11 +1,12 @@
-"""Read API + live fan-out (spec v3 §12).
+"""Read API + live fan-out (spec v3 §12), owner-scoped to the signed-in user.
 
-- GET /meetings — recent meetings the principal is authorized for.
+- GET /meetings — meetings the user owns (admin: all).
 - GET /meetings/{id}/transcript?after=<seq> — durable final segments + translations, ordered.
-- WS  /meetings/{id}/live — relays interim/final/translation events from the meeting's Redis
-  stream. Clients backfill durable history via the transcript endpoint, then go live here.
+- WS  /meetings/{id}/live — relays interim/final/translation events (session-cookie authed).
+- POST /consent, DELETE /{id} — owner-or-admin.
 
-All behind the auth edge with per-meeting authorization.
+Web auth is the session cookie (require_user / ws_user). The capture ingest WS keeps its capability
+tokens — the extension mints one via /api/capture/token, which also claims the meeting's owner.
 """
 
 from __future__ import annotations
@@ -17,31 +18,34 @@ from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSo
 from pydantic import BaseModel
 
 from app import fanout
-from app.auth.dependencies import require_claims, ws_token
-from app.auth.tokens import AuthError, Claims, authorize_meeting, verify_capability_token
+from app.auth.dependencies import require_user, ws_user
 from app.db import repo
-from app.db.models import ConsentStatus
+from app.db.models import ConsentStatus, Meeting, User
 from app.logging import get_logger
 
 router = APIRouter(prefix="/meetings", tags=["meetings"])
 log = get_logger("meetings")
 
 
+def _authorized(meeting: Meeting, user: User) -> bool:
+    """Owner-scoped: the owner or an admin. Unowned meetings are admin-only."""
+    return user.is_admin or (meeting.owner_id is not None and meeting.owner_id == user.id)
+
+
 @router.get("")
-async def list_meetings(request: Request, claims: Claims = Depends(require_claims)) -> list[dict]:
+async def list_meetings(request: Request, user: User = Depends(require_user)) -> list[dict]:
     async with request.app.state.session_factory() as db:
-        meetings = await repo.list_recent_meetings(db)
-        return [
-            {
-                "id": str(m.id),
-                "platform": m.platform.value,
-                "external_meeting_id": m.external_meeting_id,
-                "title": m.title,
-                "created_at": m.created_at.isoformat(),
-            }
-            for m in meetings
-            if authorize_meeting(claims, m.platform.value, m.external_meeting_id)
-        ]
+        meetings = await repo.list_meetings_for_user(db, user_id=user.id, is_admin=user.is_admin)
+    return [
+        {
+            "id": str(m.id),
+            "platform": m.platform.value,
+            "external_meeting_id": m.external_meeting_id,
+            "title": m.title,
+            "created_at": m.created_at.isoformat(),
+        }
+        for m in meetings
+    ]
 
 
 @router.get("/{meeting_id}/transcript")
@@ -50,14 +54,12 @@ async def get_transcript(
     request: Request,
     after: int = 0,
     limit: int = 500,
-    claims: Claims = Depends(require_claims),
+    user: User = Depends(require_user),
 ) -> list[dict]:
     async with request.app.state.session_factory() as db:
         meeting = await repo.get_meeting(db, meeting_id)
-        if meeting is None:
-            raise HTTPException(status_code=404, detail="not found")
-        if not authorize_meeting(claims, meeting.platform.value, meeting.external_meeting_id):
-            raise HTTPException(status_code=403, detail="forbidden")
+        if meeting is None or not _authorized(meeting, user):
+            raise HTTPException(status_code=404, detail="not found")  # 404 — don't leak existence
         segments = await repo.transcript_for_meeting(
             db, meeting_id, after_seq=after, limit=min(max(limit, 1), 1000)
         )
@@ -86,18 +88,25 @@ class ConsentBody(BaseModel):
 
 @router.post("/consent")
 async def set_consent(
-    body: ConsentBody, request: Request, claims: Claims = Depends(require_claims)
+    body: ConsentBody, request: Request, user: User = Depends(require_user)
 ) -> dict:
-    """Record consent for a meeting (first-class GDPR state). Upserts the meeting if new."""
-    if not authorize_meeting(claims, body.platform, body.external_meeting_id):
-        raise HTTPException(status_code=403, detail="forbidden")
+    """Record consent (first-class GDPR state); claims/owns the meeting for the user."""
     try:
         status = ConsentStatus(body.status)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="invalid consent status") from exc
     async with request.app.state.session_factory() as db:
+        existing = await repo.get_meeting_by_identity(
+            db, platform=body.platform, external_meeting_id=body.external_meeting_id
+        )
+        if existing is not None and not _authorized(existing, user):
+            raise HTTPException(status_code=403, detail="forbidden")
         meeting = await repo.set_consent(
-            db, platform=body.platform, external_meeting_id=body.external_meeting_id, status=status
+            db,
+            platform=body.platform,
+            external_meeting_id=body.external_meeting_id,
+            status=status,
+            owner_id=user.id,
         )
         await db.commit()
         return {"id": str(meeting.id), "consent_status": meeting.consent_status.value}
@@ -105,20 +114,16 @@ async def set_consent(
 
 @router.delete("/{meeting_id}")
 async def erase_meeting(
-    meeting_id: uuid.UUID, request: Request, claims: Claims = Depends(require_claims)
+    meeting_id: uuid.UUID, request: Request, user: User = Depends(require_user)
 ) -> dict:
-    """GDPR erasure (admin scope). Delete the meeting's audio objects, then its rows (DB cascade).
-    Aborts BEFORE deleting rows if any object delete genuinely fails, so PII audio is never
-    orphaned beyond the reach of both erasure and retention."""
-    if not claims.admin:
-        raise HTTPException(status_code=403, detail="admin scope required")
+    """GDPR erasure (owner-or-admin). Delete the meeting's audio objects, then its rows (cascade).
+    Aborts BEFORE deleting rows if any object delete genuinely fails, so PII audio is never orphaned
+    beyond the reach of both erasure and retention."""
     storage = request.app.state.storage
     async with request.app.state.session_factory() as db:
         meeting = await repo.get_meeting(db, meeting_id)
-        if meeting is None:
+        if meeting is None or not _authorized(meeting, user):
             raise HTTPException(status_code=404, detail="not found")
-        if not authorize_meeting(claims, meeting.platform.value, meeting.external_meeting_id):
-            raise HTTPException(status_code=403, detail="forbidden")
         keys = await repo.chunk_keys_for_meeting(db, meeting_id)
     failed = 0
     for key in keys:
@@ -140,25 +145,17 @@ async def erase_meeting(
 
 @router.websocket("/{meeting_id}/live")
 async def live(ws: WebSocket, meeting_id: uuid.UUID) -> None:
-    settings = ws.app.state.settings
-    token, subprotocol = ws_token(ws)
-    try:
-        claims = verify_capability_token(
-            token or "", secret=settings.auth_secret, algorithm=settings.auth_algorithm
-        )
-    except AuthError:
+    user = await ws_user(ws)
+    if user is None:
         await ws.close(code=1008, reason="unauthorized")
         return
-
     async with ws.app.state.session_factory() as db:
         meeting = await repo.get_meeting(db, meeting_id)
-    if meeting is None or not authorize_meeting(
-        claims, meeting.platform.value, meeting.external_meeting_id
-    ):
+    if meeting is None or not _authorized(meeting, user):
         await ws.close(code=1008, reason="forbidden")
         return
 
-    await ws.accept(subprotocol=subprotocol)
+    await ws.accept()
     redis = ws.app.state.redis
     key = fanout.stream_key(meeting_id)
     last_id = "$"  # new events only; clients backfill durable history via the transcript endpoint

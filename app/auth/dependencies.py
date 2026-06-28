@@ -88,6 +88,27 @@ async def require_user(request: Request) -> User:
     return user
 
 
+async def ws_user(ws: WebSocket) -> User | None:
+    """WebSocket equivalent of require_user (session cookie). Returns None on any failure; the
+    caller closes the socket. Used by the live transcript WS for the signed-in web app."""
+    token = ws.cookies.get(SESSION_COOKIE)
+    if not token:
+        return None
+    settings = ws.app.state.settings
+    try:
+        payload = verify_access_token(
+            token, secret=settings.auth_secret, algorithm=settings.auth_algorithm
+        )
+        user_id = uuid.UUID(payload["sub"])
+    except (jwt.PyJWTError, ValueError, KeyError, TypeError):
+        return None
+    async with ws.app.state.session_factory() as db:
+        user = await repo.get_user_by_id(db, user_id)
+    if user is None or not user.is_active or payload.get("ver") != user.token_version:
+        return None
+    return user
+
+
 async def require_admin(user: User = Depends(require_user)) -> User:
     if not user.is_admin:
         raise HTTPException(status_code=403, detail="admin required")

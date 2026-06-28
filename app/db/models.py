@@ -81,6 +81,10 @@ class Meeting(Base):
     platform: Mapped[Platform] = mapped_column(SAEnum(Platform, name="platform"), nullable=False)
     external_meeting_id: Mapped[str] = mapped_column(String(512), nullable=False)
     title: Mapped[str | None] = mapped_column(Text())
+    # Owner (claimed by capture-token / consent). NULL = unowned, visible to admins only.
+    owner_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
     consent_status: Mapped[ConsentStatus] = mapped_column(
         SAEnum(ConsentStatus, name="consent_status"),
         default=ConsentStatus.pending,

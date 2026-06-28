@@ -1,35 +1,54 @@
-"""Read API tests: transcript retrieval, per-meeting authorization, translations.
+"""Read API tests: transcript retrieval, owner-scoped authorization, translations.
 
-Drives the ingest pipeline (FakeTranscriber/FakeTranslator) then reads it back. Requires
-Postgres + Redis; skips otherwise.
+Capture drives the ingest pipeline (capability token, unchanged); the read API is now owner-scoped
+to the signed-in web user (admin sees all). Requires Postgres + Redis; skips otherwise.
 """
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.audio.frames import encode_frame
+from app.auth.passwords import hash_password
 from app.auth.tokens import issue_capability_token
 from app.config import get_settings
+from app.db import repo
+from app.db.base import make_engine, make_session_factory
 from app.main import app
 
+PW = "Sup3r-Secret-Pass!"
 
-def _token(meetings: list[str]) -> str:
-    settings = get_settings()
+
+def _cap_token(meetings: list[str]) -> str:
+    s = get_settings()
     return issue_capability_token(
-        principal="op",
-        secret=settings.auth_secret,
-        algorithm=settings.auth_algorithm,
-        ttl_s=60,
-        meetings=meetings,
+        principal="op", secret=s.auth_secret, algorithm=s.auth_algorithm,
+        ttl_s=60, meetings=meetings,
     )
 
 
-def _bearer(token: str) -> dict:
-    return {"Authorization": "Bearer " + token}
+def _make_user(email: str, *, admin: bool) -> None:
+    async def _run() -> None:
+        engine = make_engine(get_settings().database_url)
+        factory = make_session_factory(engine)
+        try:
+            async with factory() as db:
+                await repo.create_user(
+                    db, email=email, password_hash=hash_password(PW), is_admin=admin
+                )
+                await db.commit()
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_run())
+
+
+def _login(client: TestClient, email: str) -> None:
+    assert client.post("/api/auth/login", json={"email": email, "password": PW}).status_code == 200
 
 
 def _capture(client: TestClient, token: str, external_meeting_id: str, frames: int = 2) -> None:
@@ -54,13 +73,16 @@ def test_transcript_read_authz_and_translations():
         if client.get("/readyz").status_code != 200:
             pytest.skip("datastores not ready")
         ext = f"read-mtg-{uuid.uuid4().hex[:8]}"
-        wildcard = _token(["*"])
-        _capture(client, wildcard, ext, frames=2)
+        _capture(client, _cap_token(["*"]), ext, frames=2)  # creates an (unowned) meeting
 
-        meetings = client.get("/api/meetings", headers=_bearer(wildcard)).json()
+        # Admin (session cookie) sees + reads any meeting.
+        admin_email = f"admin-{uuid.uuid4().hex[:8]}@test.io"
+        _make_user(admin_email, admin=True)
+        _login(client, admin_email)
+        meetings = client.get("/api/meetings").json()
         meeting = next(m for m in meetings if m["external_meeting_id"] == ext)
 
-        resp = client.get(f"/api/meetings/{meeting['id']}/transcript", headers=_bearer(wildcard))
+        resp = client.get(f"/api/meetings/{meeting['id']}/transcript")
         assert resp.status_code == 200
         segs = resp.json()
         assert len(segs) == 2
@@ -70,10 +92,12 @@ def test_transcript_read_authz_and_translations():
         if non_en:
             assert all(len(s["translations"]) == len(non_en) for s in segs)
 
-        # Authorization: a token scoped to a different meeting can't read this one, and doesn't
-        # see it listed.
-        other = _token(["a-different-meeting"])
-        forbidden = client.get(f"/api/meetings/{meeting['id']}/transcript", headers=_bearer(other))
-        assert forbidden.status_code == 403
-        listed = client.get("/api/meetings", headers=_bearer(other)).json()
+        # A non-admin user neither sees nor can read someone else's (here: unowned) meeting.
+        client.post("/api/auth/logout")
+        other_email = f"other-{uuid.uuid4().hex[:8]}@test.io"
+        _make_user(other_email, admin=False)
+        _login(client, other_email)
+        forbidden = client.get(f"/api/meetings/{meeting['id']}/transcript")
+        assert forbidden.status_code == 404  # owner-scoped -> 404, no existence leak
+        listed = client.get("/api/meetings").json()
         assert all(m["external_meeting_id"] != ext for m in listed)

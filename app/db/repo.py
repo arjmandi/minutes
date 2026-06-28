@@ -29,22 +29,33 @@ from app.db.models import (
 )
 
 
-async def upsert_meeting(db: AsyncSession, *, platform: str, external_meeting_id: str) -> Meeting:
-    """DB-arbitrated identity. A no-op DO UPDATE guarantees a row is RETURNING'd in one
-    statement, avoiding the lost-update / NoResultFound race of insert-then-select."""
-    stmt = (
-        pg_insert(Meeting)
-        .values(platform=Platform(platform), external_meeting_id=external_meeting_id)
-        .on_conflict_do_update(
-            index_elements=["platform", "external_meeting_id"],
-            set_={"external_meeting_id": external_meeting_id},
-        )
-        .returning(Meeting.id)
+async def upsert_meeting(
+    db: AsyncSession, *, platform: str, external_meeting_id: str, owner_id: uuid.UUID | None = None
+) -> Meeting:
+    """DB-arbitrated identity. A DO UPDATE guarantees a row is RETURNING'd in one statement,
+    avoiding the lost-update / NoResultFound race of insert-then-select. The first owner sticks:
+    an ownerless capture never clears it; an owner-bearing call claims an unowned meeting."""
+    insert = pg_insert(Meeting).values(
+        platform=Platform(platform), external_meeting_id=external_meeting_id, owner_id=owner_id
     )
+    stmt = insert.on_conflict_do_update(
+        index_elements=["platform", "external_meeting_id"],
+        set_={"owner_id": func.coalesce(Meeting.owner_id, insert.excluded.owner_id)},
+    ).returning(Meeting.id)
     meeting_id = (await db.execute(stmt)).scalar_one()
     meeting = await db.get(Meeting, meeting_id)
     assert meeting is not None
     return meeting
+
+
+async def list_meetings_for_user(
+    db: AsyncSession, *, user_id: uuid.UUID, is_admin: bool, limit: int = 100
+) -> list[Meeting]:
+    """Owner-scoped meeting list: a user sees only their own; an admin sees all."""
+    q = select(Meeting).order_by(Meeting.created_at.desc()).limit(limit)
+    if not is_admin:
+        q = q.where(Meeting.owner_id == user_id)
+    return list((await db.execute(q)).scalars())
 
 
 async def create_session(
@@ -339,9 +350,16 @@ async def get_meeting_by_identity(
 
 
 async def set_consent(
-    db: AsyncSession, *, platform: str, external_meeting_id: str, status: ConsentStatus
+    db: AsyncSession,
+    *,
+    platform: str,
+    external_meeting_id: str,
+    status: ConsentStatus,
+    owner_id: uuid.UUID | None = None,
 ) -> Meeting:
-    meeting = await upsert_meeting(db, platform=platform, external_meeting_id=external_meeting_id)
+    meeting = await upsert_meeting(
+        db, platform=platform, external_meeting_id=external_meeting_id, owner_id=owner_id
+    )
     meeting.consent_status = status
     meeting.consent_captured_at = datetime.now(UTC)
     await db.flush()

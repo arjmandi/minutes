@@ -13,12 +13,16 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.audio.frames import encode_frame
+from app.auth.passwords import hash_password
 from app.auth.tokens import issue_capability_token
 from app.config import Settings, get_settings
+from app.db import repo
 from app.db.base import make_engine, make_session_factory
 from app.db.models import AudioChunk, ChunkState, Meeting, Platform, Session, SessionStatus
 from app.jobs import reconcile, retention
 from app.main import app, create_app
+
+PW = "Sup3r-Secret-Pass!"
 
 
 def _token() -> str:
@@ -28,21 +32,24 @@ def _token() -> str:
     )
 
 
-def _bearer() -> dict:
-    return {"Authorization": "Bearer " + _token()}
+def _make_user(email: str, *, admin: bool) -> None:
+    async def _run() -> None:
+        engine = make_engine(get_settings().database_url)
+        factory = make_session_factory(engine)
+        try:
+            async with factory() as db:
+                await repo.create_user(
+                    db, email=email, password_hash=hash_password(PW), is_admin=admin
+                )
+                await db.commit()
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_run())
 
 
-def _admin_bearer() -> dict:
-    s = get_settings()
-    token = issue_capability_token(
-        principal="admin",
-        secret=s.auth_secret,
-        algorithm=s.auth_algorithm,
-        ttl_s=60,
-        meetings=["*"],
-        admin=True,
-    )
-    return {"Authorization": "Bearer " + token}
+def _login(client: TestClient, email: str) -> None:
+    assert client.post("/api/auth/login", json={"email": email, "password": PW}).status_code == 200
 
 
 def _hello(ext: str, call_id: str) -> dict:
@@ -64,17 +71,26 @@ def test_erasure_removes_meeting_and_objects():
         if client.get("/readyz").status_code != 200:
             pytest.skip("datastores not ready")
         ext = f"erase-{uuid.uuid4().hex[:8]}"
-        _capture(client, ext)
-        meetings = client.get("/api/meetings", headers=_bearer()).json()
+        _capture(client, ext)  # creates an (unowned) meeting
+        admin_email = f"adm-{uuid.uuid4().hex[:8]}@test.io"
+        _make_user(admin_email, admin=True)
+        _login(client, admin_email)
+        meetings = client.get("/api/meetings").json()
         meeting = next(m for m in meetings if m["external_meeting_id"] == ext)
-        # A capture-scoped token cannot erase (admin scope required).
-        assert client.delete(f"/api/meetings/{meeting['id']}", headers=_bearer()).status_code == 403
-        resp = client.delete(f"/api/meetings/{meeting['id']}", headers=_admin_bearer())
+        # A non-admin (non-owner) cannot erase it — owner-scoped 404.
+        client.post("/api/auth/logout")
+        other_email = f"oth-{uuid.uuid4().hex[:8]}@test.io"
+        _make_user(other_email, admin=False)
+        _login(client, other_email)
+        assert client.delete(f"/api/meetings/{meeting['id']}").status_code == 404
+        # Admin erases.
+        client.post("/api/auth/logout")
+        _login(client, admin_email)
+        resp = client.delete(f"/api/meetings/{meeting['id']}")
         assert resp.status_code == 200
         assert resp.json()["deleted"] is True
         # transcript gone (404)
-        gone = client.get(f"/api/meetings/{meeting['id']}/transcript", headers=_bearer())
-        assert gone.status_code == 404
+        assert client.get(f"/api/meetings/{meeting['id']}/transcript").status_code == 404
 
 
 def test_consent_gate_blocks_then_allows():
@@ -89,10 +105,12 @@ def test_consent_gate_blocks_then_allows():
             msg = ws.receive_json()
             assert msg["type"] == "forbidden"
             assert msg["reason"] == "consent_required"
-        # Grant consent.
+        # Grant consent (as a signed-in user).
+        email = f"cg-{uuid.uuid4().hex[:8]}@test.io"
+        _make_user(email, admin=False)
+        _login(client, email)
         granted = client.post(
             "/api/meetings/consent",
-            headers=_bearer(),
             json={"platform": "meet", "external_meeting_id": ext, "status": "granted"},
         )
         assert granted.status_code == 200

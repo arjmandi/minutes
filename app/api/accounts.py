@@ -307,7 +307,10 @@ async def capture_token(
     settings = request.app.state.settings
     async with request.app.state.session_factory() as db:
         await repo.upsert_meeting(
-            db, platform=body.platform, external_meeting_id=body.external_meeting_id
+            db,
+            platform=body.platform,
+            external_meeting_id=body.external_meeting_id,
+            owner_id=user.id,  # claim the meeting for this user (owner-scoping)
         )
         await db.commit()
     scope = f"{body.platform}:{body.external_meeting_id}"
