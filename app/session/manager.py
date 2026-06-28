@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from app import control, fanout
 from app.audio.wav import BYTES_PER_SECOND, wrap_pcm
 from app.db import repo
-from app.db.models import ChunkState, SessionStatus
+from app.db.models import ChunkState, SessionStatus, TranslationStatus
 from app.logging import get_logger
 from app.session.adapter import ClientCaptureAdapter
 from app.session.events import AudioFrame, EndReason, SessionEnded, SessionStarted
@@ -213,27 +213,35 @@ class SessionManager:
                 if item is None:
                     return
                 seg_id, text, source_lang = item
+                # Snapshot live targets; the source language is never a translation target.
+                requested = [t for t in list(live_targets) if t != source_lang]
+                if not requested or not text.strip():
+                    continue
                 try:
                     out = await translator.translate(
-                        text,
-                        source_language=source_lang,
-                        target_languages=list(live_targets),  # snapshot the live targets
+                        text, source_language=source_lang, target_languages=requested
                     )
-                    if not out:
-                        continue
+                    # Persist a row per requested target so a provider failure is a first-class,
+                    # re-translatable state (status=failed) — not a silently missing translation.
                     async with self._session_factory() as db:
-                        for target, translated in out.items():
+                        for target in requested:
+                            ok = target in out
                             await repo.upsert_translation(
-                                db, segment_id=seg_id, target_language=target, text=translated
+                                db,
+                                segment_id=seg_id,
+                                target_language=target,
+                                text=out.get(target, ""),
+                                status=TranslationStatus.ok if ok else TranslationStatus.failed,
                             )
                         await db.commit()
-                    for target, translated in out.items():
+                    for target in requested:
                         enqueue_fanout(
                             {
                                 "kind": "translation",
                                 "segment_id": str(seg_id),
                                 "target": target,
-                                "text": translated,
+                                "text": out.get(target, ""),
+                                "status": "ok" if target in out else "failed",
                             }
                         )
                 except Exception as exc:  # noqa: BLE001 — translation is best-effort

@@ -106,10 +106,10 @@ def test_pipeline_persists_one_segment_per_frame():
 
     segs, trans = _counts(session_id)
     assert segs == 3
-    # FakeTranscriber emits source language "en"; FakeTranslator translates each segment into
-    # each non-"en" target. So translations == segments × (non-"en" targets).
-    non_en_targets = [t for t in get_settings().translation_targets if t != "en"]
-    assert trans == 3 * len(non_en_targets)
+    # Translation is now first-class per meeting (spec v3 §7), not driven by server-wide targets.
+    # This capture is an unowned meeting with no translation config, so it produces no translations
+    # (see test_translation.py for the seeded-config auto-translate path).
+    assert trans == 0
 
     # Audio archival: the final partial chunk is flushed on end and marked RECORDED (FakeStorage).
     total_chunks, recorded_chunks = _chunk_counts(session_id)

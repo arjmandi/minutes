@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select
+from sqlalchemy import update as sa_update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +26,8 @@ from app.db.models import (
     TokenKind,
     TranscriptSegment,
     Translation,
+    TranslationSource,
+    TranslationStatus,
     User,
 )
 
@@ -171,22 +174,101 @@ async def upsert_translation(
     target_language: str,
     text: str,
     source_revision: int = 0,
+    status: TranslationStatus = TranslationStatus.ok,
+    source: TranslationSource = TranslationSource.auto,
 ) -> None:
-    """Persist a segment's translation; re-translation of a corrected segment UPSERTs in place."""
-    stmt = (
-        pg_insert(Translation)
-        .values(
-            segment_id=segment_id,
-            target_language=target_language,
-            text=text,
-            source_revision=source_revision,
+    """Persist a segment's translation; re-translation of a corrected segment UPSERTs in place.
+
+    A later success (e.g. on-demand retry) overwrites a prior ``failed`` row; ``updated_at`` bumps
+    via ``onupdate`` so the live fan-out + read API reflect the newest attempt.
+    """
+    insert = pg_insert(Translation).values(
+        segment_id=segment_id,
+        target_language=target_language,
+        text=text,
+        source_revision=source_revision,
+        status=status,
+        source=source,
+    )
+    set_ = {
+        "text": text,
+        "source_revision": source_revision,
+        "status": status,
+        "source": source,
+    }
+    # Non-destructive: a successful translation always wins (newest success replaces in place), but
+    # a failed/empty retry must never clobber an existing good translation — it only lands when the
+    # stored row is not already ok (so failure stays first-class until a real translation exists).
+    if status == TranslationStatus.ok:
+        stmt = insert.on_conflict_do_update(
+            index_elements=["segment_id", "target_language"], set_=set_
         )
-        .on_conflict_do_update(
+    else:
+        stmt = insert.on_conflict_do_update(
             index_elements=["segment_id", "target_language"],
-            set_={"text": text, "source_revision": source_revision},
+            set_=set_,
+            where=Translation.status != TranslationStatus.ok,
+        )
+    await db.execute(stmt)
+
+
+async def seed_meeting_translation(
+    db: AsyncSession,
+    *,
+    meeting_id: uuid.UUID,
+    enabled: bool,
+    output_language: str | None,
+    model: str | None,
+) -> None:
+    """Seed a meeting's translation config from the owner's defaults — once, on claim.
+
+    No-ops unless the owner has a default output language AND the meeting has never been configured
+    (``translation_output_language IS NULL``), so a user's explicit per-meeting choice is never
+    clobbered by a later reconnect.
+    """
+    if not output_language:
+        return
+    await db.execute(
+        sa_update(Meeting)
+        .where(Meeting.id == meeting_id, Meeting.translation_output_language.is_(None))
+        .values(
+            translation_enabled=enabled,
+            translation_output_language=output_language,
+            translation_model=model,
         )
     )
-    await db.execute(stmt)
+
+
+async def set_meeting_translation_config(
+    db: AsyncSession, *, meeting_id: uuid.UUID, **fields: object
+) -> None:
+    """Update the given translation-config columns on a meeting (caller validates ownership)."""
+    allowed = {
+        "translation_enabled",
+        "translation_output_language",
+        "translation_input_language",
+        "translation_prompt",
+        "translation_model",
+    }
+    values = {k: v for k, v in fields.items() if k in allowed}
+    if not values:
+        return
+    await db.execute(sa_update(Meeting).where(Meeting.id == meeting_id).values(**values))
+
+
+async def get_segment_for_translation(
+    db: AsyncSession, segment_id: uuid.UUID
+) -> tuple[TranscriptSegment, Meeting] | None:
+    """Load a final segment + its owning meeting (for on-demand translate + ownership check)."""
+    row = (
+        await db.execute(
+            select(TranscriptSegment, Meeting)
+            .join(Session, TranscriptSegment.session_id == Session.id)
+            .join(Meeting, Session.meeting_id == Meeting.id)
+            .where(TranscriptSegment.id == segment_id)
+        )
+    ).first()
+    return (row[0], row[1]) if row is not None else None
 
 
 # --- audio archival (two-phase write, spec v3 §9) ---

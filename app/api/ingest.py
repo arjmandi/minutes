@@ -26,12 +26,15 @@ from app.admission.registry import AcquireResult
 from app.audio.frames import decode_frame
 from app.auth.dependencies import ws_token
 from app.auth.tokens import AuthError, authorize_meeting, verify_capability_token
+from app.config import DEV_ENVS, Settings
 from app.db import repo
 from app.db.models import ConsentStatus
 from app.logging import get_logger
 from app.session.adapter import ClientCaptureAdapter
 from app.session.events import EndReason
 from app.session.manager import SessionManager
+from app.translate.base import Translator
+from app.translate.resolve import build_user_translator
 
 router = APIRouter(tags=["ingest"])
 log = get_logger("ingest")
@@ -41,6 +44,38 @@ _CLOSE_PROTOCOL = 1003  # malformed hello
 _CLOSE_OVERLOAD = 1013  # at capacity
 _CLOSE_INTERNAL = 1011  # unexpected backend error
 _FEED_TIMEOUT_S = 2.0
+
+
+async def _resolve_meeting_translation(
+    state, settings: Settings, platform: str, external_meeting_id: str
+) -> tuple[Translator, list[str]]:
+    """Per-meeting translation config (spec v3 §7) -> (translator, live targets) for this session.
+
+    The meeting carries the config; its owner supplies the LLM key. Disabled / unconfigured -> no
+    targets. Enabled with an owner key -> Claude bound to that key. Enabled *without* a key falls
+    back to the key-less fake only in dev/test envs (so local + CI exercise the pipeline); in prod
+    a key-less meeting produces no live translation (the read API can translate-on-demand later).
+    """
+    async with state.session_factory() as db:
+        meeting = await repo.get_meeting_by_identity(
+            db, platform=platform, external_meeting_id=external_meeting_id
+        )
+        if (
+            meeting is None
+            or not meeting.translation_enabled
+            or not meeting.translation_output_language
+        ):
+            return state.translator_factory(None), []
+        owner = await repo.get_user_by_id(db, meeting.owner_id) if meeting.owner_id else None
+        translator = build_user_translator(
+            owner, settings=settings, model=meeting.translation_model
+        )
+        targets = [meeting.translation_output_language]
+    if translator is None:
+        if settings.app_env not in DEV_ENVS:
+            return state.translator_factory(None), []  # prod, no key -> no live translation
+        translator = state.translator_factory(None)  # dev/test: key-less fake
+    return translator, targets
 
 
 @router.websocket("/ingest")
@@ -113,13 +148,16 @@ async def ingest_ws(ws: WebSocket) -> None:
             return
 
         call_id = requested_call_id  # we now own a slot -> release in finally
+        translator, targets = await _resolve_meeting_translation(
+            ws.app.state, settings, platform, external_meeting_id
+        )
         adapter = ClientCaptureAdapter(platform, external_meeting_id, call_id)
         manager = SessionManager(
             session_factory=ws.app.state.session_factory,
             redis=ws.app.state.redis,
             transcriber_factory=ws.app.state.transcriber_factory,
-            translator_factory=ws.app.state.translator_factory,
-            translation_targets=settings.translation_targets,
+            translator_factory=lambda _vocab=None: translator,
+            translation_targets=targets,
             storage=ws.app.state.storage,
             chunk_interval_s=settings.chunk_interval_minutes * 60,
             worker_id=registry.worker_id,

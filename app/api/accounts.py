@@ -306,12 +306,24 @@ async def capture_token(
     """Mint a short capability token for the ingest WS, scoped to one meeting."""
     settings = request.app.state.settings
     async with request.app.state.session_factory() as db:
-        await repo.upsert_meeting(
+        meeting = await repo.upsert_meeting(
             db,
             platform=body.platform,
             external_meeting_id=body.external_meeting_id,
             owner_id=user.id,  # claim the meeting for this user (owner-scoping)
         )
+        # Seed translation config from the owner's defaults (once; never clobbers an explicit
+        # per-meeting choice) so the capture session starts translating per the user's preference.
+        # Only the meeting's owner may seed — a non-owner reconnecting to someone else's meeting
+        # (owner_id sticks via coalesce) must not stamp its own defaults onto that meeting.
+        if meeting.owner_id == user.id:
+            await repo.seed_meeting_translation(
+                db,
+                meeting_id=meeting.id,
+                enabled=user.default_translation_on,
+                output_language=user.default_output_language,
+                model=user.default_model,
+            )
         await db.commit()
     scope = f"{body.platform}:{body.external_meeting_id}"
     token = issue_capability_token(

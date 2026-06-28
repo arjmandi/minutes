@@ -88,9 +88,9 @@ def test_transcript_read_authz_and_translations():
         assert len(segs) == 2
         assert [s["meeting_seq"] for s in segs] == sorted(s["meeting_seq"] for s in segs)
 
-        non_en = [t for t in get_settings().translation_targets if t != "en"]
-        if non_en:
-            assert all(len(s["translations"]) == len(non_en) for s in segs)
+        # Translation is now first-class per meeting (not server-wide targets): an unowned,
+        # capture-created meeting has translation disabled, so it carries no translations.
+        assert all(s["translations"] == [] for s in segs)
 
         # A non-admin user neither sees nor can read someone else's (here: unowned) meeting.
         client.post("/api/auth/logout")

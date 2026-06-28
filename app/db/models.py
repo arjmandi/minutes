@@ -63,6 +63,17 @@ class TokenKind(enum.StrEnum):
     device = "device"  # long-lived token for the capture extension
 
 
+class TranslationStatus(enum.StrEnum):
+    pending = "pending"  # queued / in flight (on-demand)
+    ok = "ok"  # produced successfully
+    failed = "failed"  # provider error or empty result; re-translatable on demand
+
+
+class TranslationSource(enum.StrEnum):
+    auto = "auto"  # produced live by the session pipeline
+    manual = "manual"  # produced on demand via the read API ("translate this line")
+
+
 def _uuid_col() -> Mapped[uuid.UUID]:
     return mapped_column(primary_key=True, default=uuid.uuid4)
 
@@ -91,6 +102,15 @@ class Meeting(Base):
         nullable=False,
     )
     consent_captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # First-class per-meeting translation config (spec v3 §7). Seeded from the owner's defaults on
+    # claim; editable via the read API. output_language NULL == "never configured" (seed sentinel).
+    translation_enabled: Mapped[bool] = mapped_column(default=False, nullable=False)
+    translation_output_language: Mapped[str | None] = mapped_column(String(16))
+    translation_input_language: Mapped[str] = mapped_column(
+        String(16), default="detect", nullable=False
+    )
+    translation_prompt: Mapped[str | None] = mapped_column(Text())
+    translation_model: Mapped[str | None] = mapped_column(String(128))
     created_at: Mapped[datetime] = _created_at()
 
     sessions: Mapped[list[Session]] = relationship(back_populates="meeting")
@@ -176,6 +196,16 @@ class Translation(Base):
     target_language: Mapped[str] = mapped_column(String(16), nullable=False)
     text: Mapped[str] = mapped_column(Text(), nullable=False)
     source_revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    status: Mapped[TranslationStatus] = mapped_column(
+        SAEnum(TranslationStatus, name="translation_status"),
+        default=TranslationStatus.ok,
+        nullable=False,
+    )
+    source: Mapped[TranslationSource] = mapped_column(
+        SAEnum(TranslationSource, name="translation_source"),
+        default=TranslationSource.auto,
+        nullable=False,
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
