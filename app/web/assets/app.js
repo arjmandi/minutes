@@ -34,6 +34,7 @@ async function api(method, path, body, opts = {}) {
     try { detail = (await r.json()).detail; } catch { /* ignore */ }
     const e = new Error(detail || "http " + r.status);
     e.status = r.status;
+    e.detail = detail; // consumers surface e.detail (server reason) with a local fallback
     throw e;
   }
   return r.status === 204 ? null : r.json();
@@ -363,7 +364,11 @@ async function translateLine(segId) {
     const res = await api("POST", "/meetings/" + selId + "/segments/" + segId + "/translate");
     const tl = root.querySelector("#translation");
     const row = tl.querySelector(`[data-seg="${segId}"]`);
-    if (row) {
+    if (!row) return;
+    if (res.status === "failed" || !res.text) {
+      row.innerHTML = `<div class="m-line__time"></div><div class="m-tl__failed">translation failed <button class="fs-tl__retry">retry</button></div><div></div>`;
+      row.querySelector("button").onclick = () => translateLine(segId);
+    } else {
       const rtlT = isRtl(res.target_language);
       row.innerHTML = `<div class="m-line__time"></div><div class="m-line__text" ${rtlT ? 'dir="rtl"' : ""}>${esc(res.text)}</div><div></div>`;
     }
@@ -371,10 +376,19 @@ async function translateLine(segId) {
 }
 
 // ---- live WS (session cookie rides along; no subprotocol) ----
-function connectLive(meetingId) {
+function connectLive(meetingId, attempt = 0) {
   const interim = root.querySelector("#interim");
-  ws = new WebSocket(location.origin.replace(/^http/, "ws") + "/api/meetings/" + meetingId + "/live");
-  ws.onmessage = (e) => {
+  const sock = new WebSocket(location.origin.replace(/^http/, "ws") + "/api/meetings/" + meetingId + "/live");
+  ws = sock;
+  sock.onclose = async (ev) => {
+    if (interim) interim.style.display = "none";
+    // Superseded (meeting switched) or a clean close: do nothing.
+    if (ws !== sock || selId !== meetingId || ev.code === 1000 || attempt >= 1) return;
+    // Likely the short-lived access cookie expired (close 1008) — refresh once, then reconnect.
+    try { await fetch("/api/auth/refresh", { method: "POST", credentials: "include" }); } catch { /* ignore */ }
+    if (ws === sock && selId === meetingId) connectLive(meetingId, attempt + 1);
+  };
+  sock.onmessage = (e) => {
     const ev = JSON.parse(e.data);
     if (selId !== meetingId) return;
     if (ev.kind === "interim") { interim.style.display = "block"; interim.textContent = ev.text; }
@@ -396,7 +410,6 @@ function connectLive(meetingId) {
       }
     }
   };
-  ws.onclose = () => { if (interim) interim.style.display = "none"; };
 }
 
 // ============================================================ UPLOAD
