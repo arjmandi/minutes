@@ -80,8 +80,12 @@ Open `https://$DOMAIN/` for the live web viewer.
 In `prod` the dev token-mint endpoint is disabled. Mint tokens out-of-band with the running config:
 
 ```bash
-# Least privilege: scope to the meeting you will capture, with a short TTL.
-docker compose exec backend python -c "from app.config import get_settings; from app.auth.tokens import issue_capability_token; s=get_settings(); print(issue_capability_token(principal='demo', secret=s.auth_secret, algorithm=s.auth_algorithm, ttl_s=3600, meetings=['meet:my-meeting-id']))"
+# All meetings, 1-day token (good for testing the viewer):
+docker compose exec -T backend python -m app.mint_token --meetings '*' --ttl 86400
+# Least privilege: scope to one meeting with a short TTL:
+docker compose exec -T backend python -m app.mint_token --meetings meet:my-meeting-id --ttl 3600
+# Admin scope (required for DELETE /meetings/{id} erasure):
+docker compose exec -T backend python -m app.mint_token --meetings '*' --ttl 3600 --admin
 ```
 
 Point capture clients (see `capture/`) at `wss://$DOMAIN/ingest` with that token — the
