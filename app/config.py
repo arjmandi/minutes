@@ -78,6 +78,10 @@ class Settings(BaseSettings):
     drain_deadline_s: int = 25
     finalize_timeout_s: int = 30  # bound on awaiting the per-call pipeline during teardown
 
+    # Audio upload -> file transcription
+    upload_max_bytes: int = 314_572_800  # ~300 MB ceiling per uploaded file
+    upload_max_concurrent: int = 2  # file-transcription jobs processed at once
+
     # GDPR
     # ge=1 floor: a 0/negative cutoff must never purge the whole dataset.
     retention_days: int = Field(default=90, ge=1)

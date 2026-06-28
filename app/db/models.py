@@ -36,6 +36,7 @@ from app.db.base import Base
 class Platform(enum.StrEnum):
     teams = "teams"
     meet = "meet"
+    upload = "upload"  # an uploaded audio file transcribed as a (single-session) meeting
 
 
 class SessionStatus(enum.StrEnum):
@@ -72,6 +73,14 @@ class TranslationStatus(enum.StrEnum):
 class TranslationSource(enum.StrEnum):
     auto = "auto"  # produced live by the session pipeline
     manual = "manual"  # produced on demand via the read API ("translate this line")
+
+
+class JobStatus(enum.StrEnum):
+    queued = "queued"  # accepted, awaiting a worker
+    processing = "processing"  # claimed by a worker (file transcription in flight)
+    done = "done"  # transcript persisted
+    failed = "failed"  # provider/processing error (see error)
+    canceled = "canceled"  # canceled by the owner before completion
 
 
 def _uuid_col() -> Mapped[uuid.UUID]:
@@ -288,3 +297,33 @@ class AuthToken(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = _created_at()
+
+
+class TranscriptionJob(Base):
+    """An uploaded audio file queued for async (file-API) transcription into its meeting."""
+
+    __tablename__ = "transcription_jobs"
+
+    id: Mapped[uuid.UUID] = _uuid_col()
+    owner_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    meeting_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("meetings.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    s3_key: Mapped[str] = mapped_column(String(1024), nullable=False)
+    original_filename: Mapped[str | None] = mapped_column(Text())
+    content_type: Mapped[str | None] = mapped_column(String(128))
+    size_bytes: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    status: Mapped[JobStatus] = mapped_column(
+        SAEnum(JobStatus, name="job_status"),
+        default=JobStatus.queued,
+        nullable=False,
+        index=True,
+    )
+    error: Mapped[str | None] = mapped_column(Text())
+    run_id: Mapped[str | None] = mapped_column(String(64))  # claiming worker (fencing)
+    created_at: Mapped[datetime] = _created_at()
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )

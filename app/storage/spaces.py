@@ -30,6 +30,12 @@ class SpacesStorage:
         async with self._session.client("s3", **self._client_kwargs) as s3:
             await s3.put_object(Bucket=self._bucket, Key=key, Body=data, ContentType=content_type)
 
+    async def download(self, key: str) -> bytes:
+        async with self._session.client("s3", **self._client_kwargs) as s3:
+            resp = await s3.get_object(Bucket=self._bucket, Key=key)
+            async with resp["Body"] as body:
+                return await body.read()
+
     async def delete(self, key: str) -> None:
         async with self._session.client("s3", **self._client_kwargs) as s3:
             await s3.delete_object(Bucket=self._bucket, Key=key)

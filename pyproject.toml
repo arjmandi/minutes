@@ -19,6 +19,7 @@ dependencies = [
     "aioboto3>=13.2",
     "argon2-cffi>=25.1.0",
     "cryptography>=49.0.0",
+    "python-multipart>=0.0.32",
 ]
 
 # Application layout (run from repo root), not a distributable package.
@@ -45,7 +46,7 @@ select = ["E", "F", "I", "UP", "B", "ASYNC"]
 
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI dependency-injection defaults are the framework's intended pattern, not B008 bugs.
-extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Header", "fastapi.Path", "fastapi.Body"]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Header", "fastapi.Path", "fastapi.Body", "fastapi.File"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -37,7 +37,7 @@ async def run() -> int:
             before = deleted
             for meeting_id in ids:
                 async with factory() as db:
-                    keys = await repo.chunk_keys_for_meeting(db, meeting_id)
+                    keys = await repo.object_keys_for_meeting(db, meeting_id)
                 for key in keys:
                     try:
                         await storage.delete(key)

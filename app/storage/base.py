@@ -9,6 +9,10 @@ from typing import Protocol, runtime_checkable
 class Storage(Protocol):
     async def upload(self, key: str, data: bytes, *, content_type: str = "audio/wav") -> None: ...
 
+    async def download(self, key: str) -> bytes:
+        """Fetch an object's bytes (used by the upload-transcription worker)."""
+        ...
+
     async def delete(self, key: str) -> None: ...
 
     async def head(self, key: str) -> bool:

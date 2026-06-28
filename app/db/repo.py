@@ -19,11 +19,13 @@ from app.db.models import (
     ChunkState,
     ConfigChange,
     ConsentStatus,
+    JobStatus,
     Meeting,
     Platform,
     Session,
     SessionStatus,
     TokenKind,
+    TranscriptionJob,
     TranscriptSegment,
     Translation,
     TranslationSource,
@@ -256,6 +258,106 @@ async def set_meeting_translation_config(
     await db.execute(sa_update(Meeting).where(Meeting.id == meeting_id).values(**values))
 
 
+# --- upload transcription jobs (spec v3 §17) ---
+
+
+async def create_transcription_job(
+    db: AsyncSession,
+    *,
+    owner_id: uuid.UUID,
+    meeting_id: uuid.UUID,
+    s3_key: str,
+    original_filename: str | None,
+    content_type: str | None,
+    size_bytes: int,
+) -> TranscriptionJob:
+    job = TranscriptionJob(
+        owner_id=owner_id,
+        meeting_id=meeting_id,
+        s3_key=s3_key,
+        original_filename=original_filename,
+        content_type=content_type,
+        size_bytes=size_bytes,
+    )
+    db.add(job)
+    await db.flush()
+    return job
+
+
+async def get_transcription_job(
+    db: AsyncSession, job_id: uuid.UUID
+) -> TranscriptionJob | None:
+    return await db.get(TranscriptionJob, job_id)
+
+
+async def list_transcription_jobs_for_user(
+    db: AsyncSession, *, user_id: uuid.UUID, is_admin: bool, limit: int = 100
+) -> list[TranscriptionJob]:
+    q = select(TranscriptionJob).order_by(TranscriptionJob.created_at.desc()).limit(limit)
+    if not is_admin:
+        q = q.where(TranscriptionJob.owner_id == user_id)
+    return list((await db.execute(q)).scalars())
+
+
+async def claim_queued_jobs(
+    db: AsyncSession, *, run_id: str, limit: int
+) -> list[TranscriptionJob]:
+    """Atomically claim up to ``limit`` queued jobs (FOR UPDATE SKIP LOCKED) -> processing.
+
+    Concurrent workers never grab the same job; the caller processes the returned jobs and commits.
+    """
+    if limit < 1:
+        return []
+    ids = (
+        await db.execute(
+            select(TranscriptionJob.id)
+            .where(TranscriptionJob.status == JobStatus.queued)
+            .order_by(TranscriptionJob.created_at)
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+    ).scalars().all()
+    if not ids:
+        return []
+    await db.execute(
+        sa_update(TranscriptionJob)
+        .where(TranscriptionJob.id.in_(ids))
+        .values(status=JobStatus.processing, run_id=run_id)
+    )
+    await db.flush()
+    jobs = [await db.get(TranscriptionJob, jid) for jid in ids]
+    return [j for j in jobs if j is not None]
+
+
+async def finish_job(
+    db: AsyncSession, *, job_id: uuid.UUID, status: JobStatus, error: str | None = None
+) -> bool:
+    """Terminal transition (processing -> done/failed), guarded so a concurrent cancel always wins.
+
+    Returns False when no processing row matched (already canceled/finished) — the caller must NOT
+    treat the job as completed in that case.
+    """
+    res = await db.execute(
+        sa_update(TranscriptionJob)
+        .where(TranscriptionJob.id == job_id, TranscriptionJob.status == JobStatus.processing)
+        .values(status=status, error=error)
+    )
+    return bool(res.rowcount)
+
+
+async def cancel_job(db: AsyncSession, *, job_id: uuid.UUID) -> bool:
+    """Cancel a job if it hasn't finished. Returns True if a cancellable job was canceled."""
+    res = await db.execute(
+        sa_update(TranscriptionJob)
+        .where(
+            TranscriptionJob.id == job_id,
+            TranscriptionJob.status.in_([JobStatus.queued, JobStatus.processing]),
+        )
+        .values(status=JobStatus.canceled)
+    )
+    return bool(res.rowcount)
+
+
 async def get_segment_for_translation(
     db: AsyncSession, segment_id: uuid.UUID
 ) -> tuple[TranscriptSegment, Meeting] | None:
@@ -464,6 +566,20 @@ async def chunk_keys_for_meeting(db: AsyncSession, meeting_id: uuid.UUID) -> lis
         .where(Session.meeting_id == meeting_id)
     )
     return [r[0] for r in rows.all()]
+
+
+async def object_keys_for_meeting(db: AsyncSession, meeting_id: uuid.UUID) -> list[str]:
+    """Every storage object owned by a meeting: rotated audio chunks + uploaded source files.
+
+    Used by GDPR erasure + retention so uploaded audio (in transcription_jobs) is purged too, not
+    just live-capture chunks.
+    """
+    keys = await chunk_keys_for_meeting(db, meeting_id)
+    rows = await db.execute(
+        select(TranscriptionJob.s3_key).where(TranscriptionJob.meeting_id == meeting_id)
+    )
+    keys.extend(k for k in rows.scalars() if k)
+    return keys
 
 
 async def delete_meeting(db: AsyncSession, meeting_id: uuid.UUID) -> bool:

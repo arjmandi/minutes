@@ -377,7 +377,7 @@ async def erase_meeting(
         meeting = await repo.get_meeting(db, meeting_id)
         if meeting is None or not _authorized(meeting, user):
             raise HTTPException(status_code=404, detail="not found")
-        keys = await repo.chunk_keys_for_meeting(db, meeting_id)
+        keys = await repo.object_keys_for_meeting(db, meeting_id)
     failed = 0
     for key in keys:
         try:
