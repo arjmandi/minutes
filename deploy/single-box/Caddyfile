@@ -1,9 +1,13 @@
-# Minimal TLS-terminating, WebSocket-aware reverse proxy for the single-box deployment.
+# TLS-terminating, WebSocket-aware edge for the single-box deployment.
 #
-# Caddy auto-provisions a Let's Encrypt certificate for $DOMAIN and transparently proxies the
-# long-lived wss:// ingest + live-view WebSockets: it forwards the Sec-WebSocket-Protocol header
-# (where the capability token rides) unmodified and imposes no idle timeout, so meeting-length
-# sessions stay open. $DOMAIN must resolve (DNS A record) to this VPS.
+# Path-split on one domain:
+#   /            -> marketing landing (static, mounted at /srv/landing; kept out of this repo)
+#   /app, /api, /assets, /shared, /ingest, /healthz, /readyz -> the product backend
+# A stock open-source self-host with no landing mounted falls back to serving the app at / too.
+#
+# Caddy auto-provisions a Let's Encrypt cert for $DOMAIN and transparently proxies the long-lived
+# wss:// ingest + live-view WebSockets (forwards Sec-WebSocket-Protocol unmodified, no idle timeout).
+# $DOMAIN must resolve (DNS A record) to this VPS.
 #
 # For Let's Encrypt expiry notifications, add a global options block at the top:
 #   { email you@example.com }
@@ -15,5 +19,24 @@
 		X-Content-Type-Options nosniff
 		Referrer-Policy no-referrer
 	}
-	reverse_proxy backend:8000
+
+	# Product app + API + capture/live WebSockets + SPA assets + public share viewer -> backend.
+	@app path /app /app/* /api/* /assets/* /shared /shared/* /ingest /healthz /readyz /openapi.json /docs /docs/*
+	handle @app {
+		reverse_proxy backend:8000
+	}
+
+	# Everything else is the marketing landing. If none is mounted, fall back to the app so /
+	# still serves the product (stock open-source self-host).
+	handle {
+		root * /srv/landing
+		@nolanding {
+			not file /index.html
+		}
+		handle @nolanding {
+			reverse_proxy backend:8000
+		}
+		try_files {path} /index.html
+		file_server
+	}
 }

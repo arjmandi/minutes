@@ -155,6 +155,9 @@ services:
       DOMAIN: ${DOMAIN}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Marketing landing served at / (kept out of this repo). Missing dir -> Caddy falls back to
+      # the app at /. Override the host path with LANDING_DIR in .env.
+      - ${LANDING_DIR:-/opt/minutes-site}:/srv/landing:ro
       - caddy_data:/data
       - caddy_config:/config
     mem_limit: 256m
