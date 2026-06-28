@@ -1,4 +1,4 @@
-"""Build the storage backend from settings: S3-compatible object storage if enabled, else the in-memory fake."""
+"""Build the storage backend from settings: real S3/MinIO if enabled, else the in-memory fake."""
 
 from __future__ import annotations
 

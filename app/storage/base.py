@@ -1,4 +1,4 @@
-"""Object-storage abstraction (S3 protocol). FakeStorage for tests; SpacesStorage for S3-compatible object storage."""
+"""Object-storage abstraction: FakeStorage for tests, SpacesStorage for real S3/MinIO."""
 
 from __future__ import annotations
 

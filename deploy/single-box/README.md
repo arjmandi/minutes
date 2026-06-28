@@ -5,11 +5,9 @@ backend, Postgres, Valkey, MinIO (S3-compatible audio store), and a small cron s
 
 > **This is a low-cost showcase deployment.** It is intentionally **not** highly available: one
 > node, single-drive Postgres/MinIO, **no replication, no failover, no automated backups**. A disk
-> or host failure can lose data — that is an accepted trade-off here. For a production /
-> HA topology (managed Postgres + Valkey + Spaces, multi-node, backups, PITR), see
-> [`../production-deployment-notes/`](../production-deployment-notes/).
-
-The application code is identical in both deployments — only the surrounding infra differs.
+> or host failure can lose data — that is an accepted trade-off here. For a production / HA setup,
+> run managed (or replicated) Postgres + Redis + S3-compatible object storage across multiple nodes
+> with backups/PITR — the application code is unchanged, only the surrounding infra differs.
 
 ## Topology (one box)
 
@@ -123,5 +121,5 @@ docker compose exec -T postgres pg_dump -U minutes minutes | gzip > /backups/min
 
 No HA, no failover, no PITR, no cross-region. The single VPS, Postgres, Valkey, and MinIO are each
 a single point of failure. Treat archived audio as best-effort (the two-phase write + reconciler
-already model loss via the `LOST` chunk state). When you outgrow this, promote to the
-[managed-service deployment plan](../production-deployment-notes/).
+already model loss via the `LOST` chunk state). When you outgrow this, move the datastores to
+managed/replicated services across multiple nodes — the application is unchanged.

@@ -2,9 +2,8 @@
 # MinIO + a cron scheduler) on ONE Hostinger KVM2 (8GB / 2 vCPU) VPS.
 #
 # Optimized for minimum cost to demonstrate the service. SPOF and data loss are ACCEPTED: a single
-# node, single-drive Postgres/MinIO, no replication, no failover, no automated backups. For an
-# HA / managed-service topology (Kubernetes + managed PG/Valkey/Spaces), see
-# ../production-deployment-notes/.
+# node, single-drive Postgres/MinIO, no replication, no failover, no automated backups. For a
+# production / HA topology, move the datastores to managed/replicated services across nodes.
 #
 #   cp .env.example .env   # then edit
 #   docker compose up -d --build

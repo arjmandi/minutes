@@ -1,7 +1,7 @@
 #!/bin/sh
-# In-compose scheduler for the single-box deployment — replaces the k8s CronJobs.
+# In-compose scheduler for the single-box deployment.
 # Runs the orphan-chunk reconciler on a short interval and the GDPR retention purge daily.
-# (The managed deployment uses k8s CronJobs instead; see ../production-deployment-notes/.)
+# (In a Kubernetes / cron-based deployment these would be scheduled jobs instead.)
 set -e
 
 RECONCILE_EVERY_S="${RECONCILE_EVERY_S:-900}"   # 15 min
