@@ -137,6 +137,7 @@ function renderLogin() {
 
 // ============================================================ APP SHELL
 function renderApp() {
+  if (isMobile()) return renderMobileApp();
   root.innerHTML = `
     <div class="m-topbar">
       <div class="m-brand">${LOGO(26)}<span>minutes</span></div>
@@ -591,6 +592,328 @@ async function saveKey(field, input) {
 }
 
 // ============================================================ PUBLIC SHARED VIEWER
+// ============================================================ MOBILE WEB APP
+// At <=760px the 3-column workspace collapses into a navigable single column
+// (list -> meeting detail with a Transcript/Translation toggle -> settings),
+// with bottom sheets for the account menu, meeting actions, and translation.
+// Reuses the same data/API layer (api, loadMeetings, drawTab, openExportDialog,
+// deleteMeeting); only the render + the live socket are mobile-specific.
+const isMobile = () => window.matchMedia("(max-width: 760px)").matches;
+let mView = "list";      // list | detail | settings
+let mSeg = "tx";         // tx | tl  (which stream the detail shows)
+let mSegs = [];          // segments of the open meeting
+let mSettingsTab = 0;
+const M_BACK = `<svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M11 4 6 9l5 5"/></svg>`;
+const M_UP = `<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M10 13V4M6.5 7.5 10 4l3.5 3.5M4 14.5v1A1.5 1.5 0 0 0 5.5 17h9a1.5 1.5 0 0 0 1.5-1.5v-1"/></svg>`;
+const M_MORE = `<svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><circle cx="10" cy="4" r="1.6"/><circle cx="10" cy="10" r="1.6"/><circle cx="10" cy="16" r="1.6"/></svg>`;
+const M_GEAR = `<svg width="19" height="19" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="10" cy="10" r="2.6"/><path d="M10 2.5v2M10 15.5v2M17.5 10h-2M4.5 10h-2M15.3 4.7l-1.4 1.4M6.1 13.9l-1.4 1.4M15.3 15.3l-1.4-1.4M6.1 6.1 4.7 4.7"/></svg>`;
+const M_CHEV = `<svg class="mrow__chev" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m6 4 4 4-4 4"/></svg>`;
+
+const mtClass = (p) => (["upload", "teams", "web", "meet"].includes(p) ? p : "ink");
+const mtLetter = (p) => (p || "?")[0].toUpperCase();
+
+function renderMobileApp() {
+  if (mView === "settings") return renderMobileSettings();
+  if (mView === "detail" && meetings.find((x) => x.id === selId)) return renderMobileDetail();
+  mView = "list";
+  return renderMobileList();
+}
+
+function mTop() {
+  return `<div class="mtop">
+    <span class="mtop__brand">${LOGO(26)}minutes</span>
+    <span class="mtop__sp"></span>
+    <button class="icon-btn" id="mupload" aria-label="Upload audio">${M_UP}</button>
+    <span class="avatar" id="mavatar">${esc(initials(me.email))}</span>
+  </div>`;
+}
+
+function renderMobileList() {
+  root.innerHTML = `<div class="mob">
+    ${mTop()}
+    <div class="mob__scroll">
+      <div class="mlhead"><h1>Transcriptions</h1>
+        <div class="mlhead__actions">
+          <button class="icon-btn" id="mreload" aria-label="Reload"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg></button>
+        </div>
+      </div>
+      <div class="mlist" id="mlist"></div>
+    </div>
+  </div>
+  <input type="file" id="mfileinput" accept="audio/*,video/*" style="display:none" />`;
+  const fi = root.querySelector("#mfileinput");
+  fi.onchange = async (e) => { await onUpload(e); if (isMobile()) renderMobileApp(); };
+  root.querySelector("#mupload").onclick = () => fi.click();
+  root.querySelector("#mavatar").onclick = mAccountSheet;
+  root.querySelector("#mreload").onclick = async (e) => {
+    const b = e.currentTarget; b.classList.add("is-loading");
+    try { await loadMeetings(); mRenderList(); } finally { b.classList.remove("is-loading"); }
+  };
+  mRenderList();
+}
+
+function mRenderList() {
+  const list = root.querySelector("#mlist");
+  if (!list) return;
+  if (!meetings.length) {
+    list.innerHTML = `<div class="m-empty" style="padding:48px 24px;text-align:center">
+      ${LOGO(48)}
+      <div class="m-empty__title" style="margin-top:14px">No transcriptions yet</div>
+      <div class="m-empty__sub">Upload an audio file, or capture any tab that plays audio with the minutes browser extension.</div>
+      <button class="fs-btn fs-btn--primary fs-btn--lg" id="memptyup" style="margin-top:14px">${M_UP} Upload audio</button>
+    </div>`;
+    list.querySelector("#memptyup").onclick = () => root.querySelector("#mfileinput").click();
+    return;
+  }
+  list.innerHTML = "";
+  for (const m of meetings) {
+    const row = node(`<div class="mrow ${m.id === selId ? "is-selected" : ""}">
+      <span class="mt-ic mt-ic--${mtClass(m.platform)}">${esc(mtLetter(m.platform))}</span>
+      <div class="mrow__main"><div class="mrow__name">${esc(m.title || m.external_meeting_id)}</div>
+        <div class="mrow__sub"><span class="m-dot m-dot--idle"></span>${esc(m.platform)} · ${esc(relTime(m.created_at))}</div></div>
+      ${M_CHEV}</div>`);
+    row.onclick = () => mOpenMeeting(m);
+    list.appendChild(row);
+  }
+}
+
+async function mOpenMeeting(m) {
+  selId = m.id; mView = "detail"; mSeg = "tx"; mSegs = [];
+  if (ws) { ws.close(); ws = null; }
+  const detail = await api("GET", "/meetings/" + m.id).catch(() => m);
+  meetings = meetings.map((x) => (x.id === m.id ? detail : x));
+  renderMobileDetail();
+  try { mSegs = await api("GET", "/meetings/" + m.id + "/transcript"); } catch { mSegs = []; }
+  mRenderStream();
+  mConnectLive(m.id);
+}
+
+function renderMobileDetail() {
+  const m = meetings.find((x) => x.id === selId);
+  if (!m) { mView = "list"; return renderMobileList(); }
+  const lang = m.translation?.output_language;
+  root.innerHTML = `<div class="mob">
+    <div class="mdhead">
+      <div class="mdhead__top">
+        <button class="mdback" id="mback">${M_BACK}</button>
+        <div class="mdhead__title"><b>${esc(m.title || m.external_meeting_id)}</b><span><span class="m-dot m-dot--idle"></span>${esc(m.platform)}</span></div>
+        <button class="icon-btn" id="mdmore" aria-label="${mSeg === "tl" ? "Translation settings" : "More"}">${mSeg === "tl" ? M_GEAR : M_MORE}</button>
+      </div>
+      <div class="mseg"><div class="mseg__track">
+        <button class="mseg__item ${mSeg === "tx" ? "is-selected" : ""}" id="segtx">Transcript</button>
+        <button class="mseg__item ${mSeg === "tl" ? "is-selected" : ""}" id="segtl">Translation ${lang ? `<span class="tgt">→ ${esc(lang)}</span>` : ""}</button>
+      </div></div>
+    </div>
+    <div class="mob__scroll"><div class="mstream" id="mstream"></div></div>
+    <div class="minterim" id="minterim" style="display:none"><span class="caret"></span><span id="minterimtxt">listening…</span></div>
+  </div>`;
+  root.querySelector("#mback").onclick = () => { if (ws) { ws.close(); ws = null; } mView = "list"; renderMobileApp(); };
+  root.querySelector("#segtx").onclick = () => { mSeg = "tx"; renderMobileDetail(); mRenderStream(); };
+  root.querySelector("#segtl").onclick = () => { mSeg = "tl"; renderMobileDetail(); mRenderStream(); };
+  root.querySelector("#mdmore").onclick = () => (mSeg === "tl" ? mTranslationSheet(m) : mActionsSheet(m));
+}
+
+function mLine(s) {
+  const rtl = isRtl(s.source_language);
+  return `<div class="mline" ${rtl ? 'dir="rtl"' : ""} data-seg="${s.id}">
+    <div class="mline__meta"><span class="mline__lang">${esc((s.source_language || "·").toUpperCase())}</span><span class="mline__time">${esc(clockOf(s))}</span></div>
+    <div class="mline__text">${esc(s.text)}</div></div>`;
+}
+
+function mTrLine(s) {
+  const tr = (s.translations || []).find((t) => t.text || t.status);
+  const out = meetings.find((x) => x.id === selId)?.translation?.output_language;
+  const src = (s.source_language || "").toUpperCase();
+  const same = out && s.source_language && out === s.source_language;
+  let body, badge = src;
+  if (tr && tr.status === "ok" && tr.text) {
+    const rtlT = isRtl(tr.target_language);
+    badge = `${src}→${(tr.target_language || "").toUpperCase()}`;
+    body = `<div class="mline__text" ${rtlT ? 'dir="rtl"' : ""}>${esc(tr.text)}</div>`;
+  } else if (same) {
+    body = `<div class="mline__already">— already ${esc(out)}</div>`;
+  } else if (tr && tr.status === "failed") {
+    body = `<div class="mline__failed">translation failed <button data-retry="${s.id}">retry</button></div>`;
+  } else {
+    body = `<div class="mline__link" data-retry="${s.id}">translate</div>`;
+  }
+  return `<div class="mline mline--tr" data-seg="${s.id}">
+    <div class="mline__meta"><span class="mline__lang">${esc(badge)}</span><span class="mline__time">${esc(clockOf(s))}</span></div>
+    ${body}</div>`;
+}
+
+function mRenderStream() {
+  const el = root.querySelector("#mstream");
+  if (!el) return;
+  if (!mSegs.length) { el.innerHTML = `<div class="m-empty" style="padding:40px 0"><div class="m-empty__sub">No transcript yet.</div></div>`; return; }
+  el.innerHTML = mSegs.map((s) => (mSeg === "tx" ? mLine(s) : mTrLine(s))).join("");
+  el.querySelectorAll("[data-retry]").forEach((b) => (b.onclick = () => mTranslateLine(b.getAttribute("data-retry"))));
+  const sc = root.querySelector(".mob__scroll");
+  if (sc) sc.scrollTop = sc.scrollHeight;
+}
+
+async function mTranslateLine(segId) {
+  try {
+    const res = await api("POST", "/meetings/" + selId + "/segments/" + segId + "/translate");
+    const seg = mSegs.find((s) => s.id === segId);
+    if (seg) seg.translations = [{ text: res.text, status: res.status, target_language: res.target_language }];
+    if (mSeg === "tl") mRenderStream();
+  } catch (e) { toast(e.detail || "Translation unavailable (set your Anthropic key in Settings)", "error"); }
+}
+
+function mConnectLive(meetingId, attempt = 0) {
+  const sock = new WebSocket(location.origin.replace(/^http/, "ws") + "/api/meetings/" + meetingId + "/live");
+  ws = sock;
+  sock.onclose = async (ev) => {
+    if (ws !== sock || selId !== meetingId || ev.code === 1000 || attempt >= 1) return;
+    try { await fetch("/api/auth/refresh", { method: "POST", credentials: "include" }); } catch { /* ignore */ }
+    if (ws === sock && selId === meetingId) mConnectLive(meetingId, attempt + 1);
+  };
+  sock.onmessage = (e) => {
+    const ev = JSON.parse(e.data);
+    if (selId !== meetingId) return;
+    const interim = root.querySelector("#minterim");
+    if (ev.kind === "interim") {
+      if (interim) { interim.style.display = "flex"; const t = root.querySelector("#minterimtxt"); if (t) t.textContent = ev.text; }
+    } else if (ev.kind === "final") {
+      if (interim) interim.style.display = "none";
+      mSegs.push({ id: ev.id, text: ev.text, source_language: ev.language, start_ms: ev.start_ms, translations: [] });
+      mRenderStream();
+    } else if (ev.kind === "translation") {
+      const seg = mSegs.find((s) => s.id === ev.segment_id);
+      if (seg) seg.translations = [{ text: ev.text, status: ev.status, target_language: ev.target }];
+      if (mSeg === "tl") mRenderStream();
+    }
+  };
+}
+
+// ---- bottom sheets ----
+function mShowSheet(inner) {
+  const mob = root.querySelector(".mob");
+  if (!mob) return null;
+  mCloseSheet();
+  mob.classList.add("mob--sheet");
+  const dim = node(`<div class="mob__dim"></div>`);
+  const sheet = node(`<div class="msheet"><div class="msheet__grab"></div>${inner}<div class="msheet__pad"></div></div>`);
+  dim.onclick = mCloseSheet;
+  mob.appendChild(dim);
+  mob.appendChild(sheet);
+  return sheet;
+}
+function mCloseSheet() {
+  const mob = root.querySelector(".mob");
+  if (!mob) return;
+  mob.classList.remove("mob--sheet");
+  mob.querySelectorAll(".mob__dim, .msheet").forEach((n) => n.remove());
+}
+
+function mAccountSheet() {
+  const s = mShowSheet(`
+    <div class="mmenu__head"><span class="avatar">${esc(initials(me.email))}</span>
+      <div><b>${esc(me.email.split("@")[0])}</b><span>${esc(me.email)}${me.is_admin ? " · admin" : ""}</span></div></div>
+    <button class="mact" id="ms-set">${M_GEAR}Settings</button>
+    <button class="mact" id="ms-out"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M9 3h7a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H9"/><path d="M12 10H3m0 0 3-3m-3 3 3 3"/></svg>Log out</button>`);
+  if (!s) return;
+  s.querySelector("#ms-set").onclick = () => { mCloseSheet(); mSettingsTab = 0; mView = "settings"; renderMobileApp(); };
+  s.querySelector("#ms-out").onclick = async () => { await api("POST", "/auth/logout").catch(() => {}); location.reload(); };
+}
+
+function mActionsSheet(m) {
+  const s = mShowSheet(`
+    <div class="msheet__title">${esc(m.title || m.external_meeting_id)}</div>
+    <button class="mact" id="a-ren"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 14.5 13.5 4a2 2 0 0 1 2.8 2.8L5.8 17l-3.3.8z"/></svg>Rename</button>
+    <button class="mact" id="a-exp"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10 3v9m0 0 3.2-3.2M10 12 6.8 8.8M4 14v1.5A1.5 1.5 0 0 0 5.5 17h9a1.5 1.5 0 0 0 1.5-1.5V14"/></svg>Export transcript<span class="mact__sub">txt · md · json</span></button>
+    <button class="mact" id="a-share"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="5" cy="10" r="2"/><circle cx="14.5" cy="5" r="2"/><circle cx="14.5" cy="15" r="2"/><path d="M6.7 9 12.8 6M6.7 11l6.1 3"/></svg><span id="a-share-lbl">${m.share?.enabled ? "Public link" : "Create public link"}</span></button>
+    <div class="msheet__sec" id="a-sharebox" style="display:none"></div>
+    <button class="mact mact--danger" id="a-del"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6h12M8 6V4.5A1.5 1.5 0 0 1 9.5 3h1A1.5 1.5 0 0 1 12 4.5V6m2 0v9.5A1.5 1.5 0 0 1 12.5 17h-5A1.5 1.5 0 0 1 6 15.5V6"/></svg>Delete meeting</button>`);
+  if (!s) return;
+  const syncMeeting = (u) => { Object.assign(m, u); meetings = meetings.map((x) => (x.id === m.id ? Object.assign({}, x, u) : x)); };
+  const drawShare = (mm) => {
+    const box = s.querySelector("#a-sharebox");
+    const lbl = s.querySelector("#a-share-lbl");
+    if (mm.share && mm.share.enabled) {
+      const url = location.origin + "/shared/" + mm.share.token;
+      lbl.textContent = "Public link";
+      box.style.display = "block";
+      box.innerHTML = `<div class="msharebox"><span class="msharebox__url">${esc(url)}</span><button class="fs-btn fs-btn--sm" id="a-copy">Copy</button></div>
+        <div style="display:flex;gap:8px;margin-top:8px"><button class="fs-btn fs-btn--sm fs-btn--ghost" id="a-rot">Rotate</button><button class="fs-btn fs-btn--sm fs-btn--danger" id="a-off">Disable</button></div>`;
+      box.querySelector("#a-copy").onclick = () => { navigator.clipboard?.writeText(url); toast("Link copied"); };
+      box.querySelector("#a-rot").onclick = async () => { const u = await api("POST", "/meetings/" + mm.id + "/share", { rotate: true }); syncMeeting(u); drawShare(u); };
+      box.querySelector("#a-off").onclick = async () => { const u = await api("DELETE", "/meetings/" + mm.id + "/share"); syncMeeting(u); drawShare(u); };
+    } else {
+      box.style.display = "none";
+      lbl.textContent = "Create public link";
+    }
+  };
+  if (m.share?.enabled) drawShare(m);
+  s.querySelector("#a-ren").onclick = async () => {
+    const title = prompt("Rename transcription", m.title || "");
+    if (title == null) return;
+    try { const u = await api("PUT", "/meetings/" + m.id, { title: title.trim() }); syncMeeting(u); mCloseSheet(); renderMobileDetail(); mRenderStream(); }
+    catch (e) { toast(e.detail || "Rename failed", "error"); }
+  };
+  s.querySelector("#a-exp").onclick = () => { mCloseSheet(); openExportDialog(m); };
+  s.querySelector("#a-share").onclick = async () => {
+    if (m.share?.enabled) { drawShare(m); return; }
+    try { const u = await api("POST", "/meetings/" + m.id + "/share", {}); syncMeeting(u); drawShare(u); }
+    catch (e) { toast(e.detail || "Could not create link", "error"); }
+  };
+  s.querySelector("#a-del").onclick = () => { mCloseSheet(); mView = "list"; deleteMeeting(m); };
+}
+
+function mTranslationSheet(m) {
+  const t = m.translation || {};
+  const langChips = LANGS.filter((l) => l.code).map((l) => `<button class="mchip ${t.output_language === l.code ? "is-selected" : ""}" data-lang="${l.code}">${esc(l.label)}</button>`).join("");
+  const modelChips = MODELS.filter((mm) => mm.id).map((mm) => `<button class="mchip ${t.model === mm.id ? "is-selected" : ""}" data-model="${mm.id}">${esc(mm.label)}</button>`).join("");
+  const s = mShowSheet(`
+    <div class="msheet__title">Translation<span class="sub">per-meeting</span></div>
+    <div class="msheet__sec"><div class="msheet__lab">Output language</div><div class="mchips" id="t-langs">${langChips}</div></div>
+    <div class="msheet__sec"><div class="msheet__lab">Model</div><div class="mchips" id="t-models">${modelChips}</div></div>
+    <div class="msheet__sec"><button class="fs-btn fs-btn--lg" id="t-redo" style="width:100%">Re-translate loaded lines</button>
+      <div class="msheet__lab" style="margin:10px 0 0;text-transform:none;letter-spacing:0">New lines translate automatically as they arrive. Translating to the spoken language is skipped.</div></div>`);
+  if (!s) return;
+  const save = async (patch) => {
+    try {
+      const u = await api("PUT", "/meetings/" + m.id + "/translation", Object.assign({ enabled: true, output_language: t.output_language, model: t.model }, patch));
+      Object.assign(m, u); meetings = meetings.map((x) => (x.id === m.id ? Object.assign({}, x, u) : x));
+      Object.assign(t, u.translation || {});
+      mTranslationSheet(m); // re-open with updated selection
+      renderMobileDetail(); mRenderStream();
+    } catch (e) { toast(e.detail || "Update failed", "error"); }
+  };
+  s.querySelectorAll("[data-lang]").forEach((b) => (b.onclick = () => save({ output_language: b.getAttribute("data-lang") })));
+  s.querySelectorAll("[data-model]").forEach((b) => (b.onclick = () => save({ model: b.getAttribute("data-model") })));
+  s.querySelector("#t-redo").onclick = async () => {
+    mCloseSheet();
+    toast("Re-translating…");
+    for (const seg of mSegs.slice()) {
+      if (seg.source_language && t.output_language === seg.source_language) continue;
+      await mTranslateLine(seg.id);
+    }
+    toast("Re-translated");
+  };
+}
+
+function renderMobileSettings() {
+  const tabs = ["Account", "API keys", "Translation", "Danger zone"];
+  root.innerHTML = `<div class="mob"><div class="mob__scroll"><div class="msettings">
+    <div class="msettings__head"><button class="mdback" id="ms-back">${M_BACK}Back</button><h1>Settings</h1></div>
+    <div class="mtabs" id="mtabs">${tabs.map((t, i) => `<button class="mtab ${i === mSettingsTab ? "is-selected" : ""}" data-t="${i}">${esc(t)}</button>`).join("")}</div>
+    <div id="settingsbody" style="padding:8px 0"></div>
+  </div></div></div>`;
+  root.querySelector("#ms-back").onclick = () => { mView = "list"; renderMobileApp(); };
+  const tabsEl = root.querySelectorAll(".mtab");
+  tabsEl.forEach((b) => (b.onclick = () => { mSettingsTab = +b.dataset.t; tabsEl.forEach((x) => x.classList.remove("is-selected")); b.classList.add("is-selected"); drawTab(mSettingsTab); }));
+  drawTab(mSettingsTab);
+}
+
+// Re-render when crossing the mobile/desktop breakpoint so the right layout shows.
+let _wasMobile = isMobile();
+window.addEventListener("resize", () => {
+  const m = isMobile();
+  if (m !== _wasMobile) { _wasMobile = m; if (me) renderApp(); }
+});
+
 async function renderShared(token) {
   root.innerHTML = `<div class="m-topbar"><div class="m-brand">${LOGO(26)}<span>minutes</span></div></div>
     <div style="flex:1;overflow:auto"><div id="sharedbody" style="max-width:820px;margin:0 auto;padding:28px 24px"></div></div>`;
