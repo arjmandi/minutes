@@ -2,6 +2,7 @@
 #
 # Path-split on one domain:
 #   /            -> marketing landing (static, mounted at /srv/landing; kept out of this repo)
+#   /docs        -> documentation site (static, mounted at /srv/docs; kept out of this repo)
 #   /app, /api, /assets, /shared, /ingest, /healthz, /readyz -> the product backend
 # A stock open-source self-host with no landing mounted falls back to serving the app at / too.
 #
@@ -21,9 +22,19 @@
 	}
 
 	# Product app + API + capture/live WebSockets + SPA assets + public share viewer -> backend.
-	@app path /app /app/* /api/* /assets/* /shared /shared/* /ingest /healthz /readyz /openapi.json /docs /docs/*
+	# (/docs is the documentation site below, not FastAPI's Swagger.)
+	@app path /app /app/* /api/* /assets/* /shared /shared/* /ingest /healthz /readyz
 	handle @app {
 		reverse_proxy backend:8000
+	}
+
+	# Documentation site (Docusaurus static build, baseUrl /docs/, mounted at /srv/docs).
+	handle /docs {
+		redir /docs/ 308
+	}
+	handle /docs/* {
+		root * /srv
+		file_server
 	}
 
 	# Everything else is the marketing landing. If none is mounted, fall back to the app so /
