@@ -221,7 +221,16 @@ async function start() {
       },
     });
     if (!res?.ok) throw new Error(res?.error || "capture failed to start");
-    setTimeout(init, 400);
+    // Flip to the recording UI immediately — don't wait on the offscreen's first storage write
+    // (it lags the WS handshake, and a single storage.onChanged can be missed while the popup is
+    // mid-render). The poll below reconciles to the real state, incl. reverting if capture fails.
+    lastCapturing = true;
+    const full = await chrome.storage.local.get(["backendBase", "deviceEmail", "minutesCapture"]);
+    renderCapture({
+      backendBase: full.backendBase,
+      deviceEmail: full.deviceEmail,
+      minutesCapture: { capturing: true, status: full.minutesCapture?.status || "" },
+    });
   } catch (e) {
     if (note) { note.textContent = e.message; note.classList.add("err"); }
   }
@@ -229,25 +238,34 @@ async function start() {
 
 async function stop() {
   await chrome.runtime.sendMessage({ type: "stop" });
-  const note = view.querySelector(".cap-note");
-  if (note) note.textContent = "Stopping…";
-  setTimeout(init, 400);
+  // Render idle now (the offscreen writes capturing=false on stop); the poll reconciles.
+  lastCapturing = false;
+  init();
 }
 
-// Live status pushed from the offscreen doc (~1/s while recording). Re-render only on a
-// start/stop transition; otherwise just refresh the frame counter in place (no flicker).
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== "local" || !changes.minutesCapture) return;
-  const v = changes.minutesCapture.newValue;
+// Reconcile the popup to the real capture state: re-render on a start/stop transition, otherwise
+// just refresh the frame counter in place (no flicker). Shared by the live storage event AND the
+// poll, so the UI converges even when a single storage.onChanged is missed.
+function applyCapture(v) {
   const cap = !!v?.capturing;
-  if (cap !== lastCapturing) {
-    lastCapturing = cap;
-    init();
-  } else if (cap) {
+  if (cap !== lastCapturing) { lastCapturing = cap; init(); return; }
+  if (cap) {
     const fr = view.querySelector(".rec__frames");
-    const m = (v.status || "").match(/(\d[\d,]*)\s*frames/);
+    const m = (v?.status || "").match(/(\d[\d,]*)\s*frames/);
     if (fr) fr.textContent = m ? "frames " + m[1] : "live";
   }
+}
+
+// Live status pushed from the offscreen doc (~1/s while recording).
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.minutesCapture) applyCapture(changes.minutesCapture.newValue);
 });
+
+// Fallback for a missed storage event: poll while the popup is open so it always converges to
+// reality (and reverts an optimistic "recording" if the capture actually failed to connect).
+setInterval(async () => {
+  const st = await chrome.storage.local.get(["minutesCapture", "deviceToken", "backendBase"]);
+  if (st.deviceToken && st.backendBase) applyCapture(st.minutesCapture);
+}, 1200);
 
 init();
