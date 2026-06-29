@@ -8,10 +8,6 @@ const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<
 
 $("gear").onclick = () => chrome.runtime.openOptionsPage();
 
-const PLATFORM = {
-  meet: { label: "Google Meet", icon: "brand/icon-meet.svg" },
-  teams: { label: "Microsoft Teams", icon: "brand/icon-teams.svg" },
-};
 // Defensive: always build API/WS URLs against the ORIGIN (strip any stray path on the saved base,
 // which would otherwise send /api/... to the static handler -> HTTP 405).
 const originOf = (base) => { try { return new URL(base).origin; } catch { return (base || "").replace(/\/+$/, ""); } };
@@ -26,25 +22,32 @@ const TEAMS_HOSTS = new Set([
   "teams.microsoft.us",
 ]);
 
-function extractMeeting(url) {
+// Detect what's capturable on this tab. We stream the tab's *audio output*, so any http(s) tab
+// works — Meet/Teams get a real meeting id + icon; anything else is a generic "web" capture named
+// after the tab title. chrome://, the Web Store, etc. (non-http) aren't capturable.
+function extractMeeting(tab) {
   try {
-    const u = new URL(url);
+    const u = new URL(tab?.url || "");
     if (u.hostname === "meet.google.com") {
       const m = u.pathname.match(/([a-z]{3}-[a-z]{4}-[a-z]{3})/);
-      return { platform: "meet", externalMeetingId: m ? m[1] : "" };
+      return { platform: "meet", externalMeetingId: m ? m[1] : "", name: "Google Meet", sub: m ? m[1] : "current call", iconUrl: "brand/icon-meet.svg" };
     }
     if (TEAMS_HOSTS.has(u.hostname)) {
-      // The classic URL embeds the thread id; the new teams.cloud.microsoft app does not, so the
-      // id may be empty here — start() then mints a per-capture id so recording still works.
+      // Classic URL embeds the thread id; the new teams.cloud.microsoft app does not (id may be
+      // empty here — start() then mints a per-capture id so recording still works).
       const m = decodeURIComponent(u.href).match(/(19:meeting_[^@/]+@thread\.v2)/);
-      return { platform: "teams", externalMeetingId: m ? m[1] : "" };
+      return { platform: "teams", externalMeetingId: m ? m[1] : "", name: "Microsoft Teams", sub: m ? m[1] : "current call", iconUrl: "brand/icon-teams.svg" };
     }
-  } catch { /* not a URL */ }
-  return { platform: "", externalMeetingId: "" };
+    if (u.protocol === "http:" || u.protocol === "https:") {
+      const host = u.hostname.replace(/^www\./, "");
+      return { platform: "web", externalMeetingId: "", name: (tab?.title || host).slice(0, 120), sub: host, iconUrl: "brand/icon-web.svg" };
+    }
+  } catch { /* not a URL / non-http */ }
+  return { platform: "", externalMeetingId: "", name: "", sub: "", iconUrl: "" };
 }
 
 let activeTabId = null;
-let meeting = { platform: "", externalMeetingId: "" };
+let meeting = { platform: "", externalMeetingId: "", name: "", sub: "", iconUrl: "" };
 let lastCapturing = null; // last rendered capture state (so the live listener only re-renders on transitions)
 
 function showFoot(email) {
@@ -58,7 +61,7 @@ function hideFoot() { foot.hidden = true; foot.innerHTML = ""; }
 async function init() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   activeTabId = tab?.id ?? null;
-  meeting = extractMeeting(tab?.url || "");
+  meeting = extractMeeting(tab);
   const st = await chrome.storage.local.get(["backendBase", "deviceToken", "deviceEmail", "minutesCapture"]);
   if (!st.backendBase) return renderNoServer();
   if (!st.deviceToken) return renderLogin(st);
@@ -141,14 +144,13 @@ function renderCapture(st) {
   showFoot(st.deviceEmail);
   const capturing = !!st.minutesCapture?.capturing;
   lastCapturing = capturing;
-  const p = PLATFORM[meeting.platform];
 
-  if (!p) {
+  if (!meeting.platform) {
     view.innerHTML = `
       <div class="empty">
         <div style="display:flex;gap:8px;opacity:.5"><img src="brand/icon-meet.svg" width="30" height="30"/><img src="brand/icon-teams.svg" width="30" height="30"/></div>
-        <div class="empty__title">No meeting on this tab</div>
-        <div class="empty__sub">Open a Google Meet or Teams meeting to capture.</div>
+        <div class="empty__title">Nothing to capture here</div>
+        <div class="empty__sub">Open a Google Meet or Teams call — or any tab playing audio (a video, podcast, webinar…).</div>
       </div>
       <button class="btn lg" id="start" disabled style="background:var(--surface2);color:var(--muted)">● Start recording</button>`;
     return;
@@ -156,8 +158,8 @@ function renderCapture(st) {
 
   const ctx = `
     <div class="ctx">
-      <img src="${p.icon}" alt="" />
-      <div style="min-width:0"><div class="ctx__name">${esc(p.label)}</div><div class="ctx__id">${esc(meeting.externalMeetingId || "current call")}</div></div>
+      <img src="${esc(meeting.iconUrl)}" alt="" width="30" height="30" />
+      <div style="min-width:0"><div class="ctx__name" title="${esc(meeting.name)}">${esc(meeting.name)}</div><div class="ctx__id">${esc(meeting.sub)}</div></div>
     </div>`;
 
   if (capturing) {
@@ -190,10 +192,12 @@ async function start() {
   // is still created + authorized. (Classic Teams + Meet keep their real id.)
   const externalMeetingId = meeting.externalMeetingId || ("web-" + crypto.randomUUID().slice(0, 8));
   try {
+    const body = { platform: meeting.platform, external_meeting_id: externalMeetingId };
+    if (meeting.platform === "web" && meeting.name) body.title = meeting.name; // name it after the tab
     const r = await fetch(originOf(st.backendBase) + "/api/capture/token", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: "Bearer " + st.deviceToken },
-      body: JSON.stringify({ platform: meeting.platform, external_meeting_id: externalMeetingId }),
+      body: JSON.stringify(body),
     });
     if (r.status === 401) {
       await chrome.storage.local.remove(["deviceToken", "deviceEmail"]);

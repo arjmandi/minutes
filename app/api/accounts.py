@@ -55,8 +55,9 @@ class SettingsBody(BaseModel):
 
 
 class CaptureTokenBody(BaseModel):
-    platform: Literal["meet", "teams"]
+    platform: Literal["meet", "teams", "web"]
     external_meeting_id: str
+    title: str | None = None  # optional display name (e.g. the browser tab title for a web capture)
 
 
 # --- helpers ---
@@ -324,6 +325,11 @@ async def capture_token(
                 output_language=user.default_output_language,
                 model=user.default_model,
             )
+            # Seed a display name (e.g. the browser tab title) once, if the meeting is unnamed.
+            if body.title and body.title.strip() and meeting.title is None:
+                await repo.set_meeting_title(
+                    db, meeting_id=meeting.id, title=body.title.strip()[:512]
+                )
         await db.commit()
     scope = f"{body.platform}:{body.external_meeting_id}"
     token = issue_capability_token(

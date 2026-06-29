@@ -212,3 +212,24 @@ def test_failed_translation_never_clobbers_a_good_one():
             await engine.dispose()
 
     asyncio.run(_run())
+
+
+def test_web_capture_token_creates_named_web_meeting():
+    """Generic 'web' tab capture: /capture/token accepts platform=web + a title and creates a
+    web-platform meeting named after the tab."""
+    with TestClient(app) as c:
+        if c.get("/readyz").status_code != 200:
+            pytest.skip("datastores not ready")
+        email = f"web-{uuid.uuid4().hex[:8]}@test.io"
+        _make_user(email)
+        c.post("/api/auth/login", json={"email": email, "password": PW})
+        dt = _device_token(c, email)
+        ext = f"web-{uuid.uuid4().hex}"
+        r = c.post(
+            "/api/capture/token",
+            headers={"Authorization": "Bearer " + dt},
+            json={"platform": "web", "external_meeting_id": ext, "title": "My YouTube Video"},
+        )
+        assert r.status_code == 200 and r.json()["scope"] == f"web:{ext}"
+        m = next(x for x in c.get("/api/meetings").json() if x["external_meeting_id"] == ext)
+        assert m["platform"] == "web" and m["title"] == "My YouTube Video"

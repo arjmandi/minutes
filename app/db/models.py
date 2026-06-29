@@ -37,6 +37,7 @@ class Platform(enum.StrEnum):
     teams = "teams"
     meet = "meet"
     upload = "upload"  # an uploaded audio file transcribed as a (single-session) meeting
+    web = "web"  # generic browser-tab audio capture (any site, not just Meet/Teams)
 
 
 class SessionStatus(enum.StrEnum):
