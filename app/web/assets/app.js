@@ -8,6 +8,23 @@ const esc = (s) =>
 const RTL = new Set(["fa", "ar", "he", "ur", "ps"]);
 const isRtl = (l) => RTL.has((l || "").slice(0, 2));
 
+// Output languages + translation models offered in the UI. Model ids are Anthropic API ids;
+// "" means the server default (Haiku). Translating to the source language is a no-op.
+const LANGS = [
+  { code: "", label: "—" },
+  { code: "en", label: "English" },
+  { code: "de", label: "German" },
+  { code: "fa", label: "Persian (فارسی)" },
+];
+const MODELS = [
+  { id: "", label: "Default (Haiku — fast)" },
+  { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5 — fastest, cheapest" },
+  { id: "claude-sonnet-4-6", label: "Sonnet 4.6 — balanced" },
+  { id: "claude-opus-4-8", label: "Opus 4.8 — best quality" },
+];
+const langOptions = (sel) => LANGS.map((l) => `<option value="${l.code}" ${l.code === (sel || "") ? "selected" : ""}>${esc(l.label)}</option>`).join("");
+const modelOptions = (sel) => MODELS.map((m) => `<option value="${m.id}" ${m.id === (sel || "") ? "selected" : ""}>${esc(m.label)}</option>`).join("");
+
 const LOGO = (n = 26) =>
   `<svg width="${n}" height="${n}" viewBox="0 0 64 64" fill="none"><rect width="64" height="64" rx="16" fill="#1B1A17"/><rect x="16" y="20" width="32" height="6" rx="3" fill="#DD5A1A"/><rect x="16" y="29" width="22" height="6" rx="3" fill="#F4F2EC"/><rect x="16" y="38" width="28" height="6" rx="3" fill="#97948A"/></svg>`;
 const COPY_ICON =
@@ -219,7 +236,7 @@ function renderMidHead(m) {
       <button class="fs-btn fs-btn--sm fs-btn--ghost fs-btn--icon" id="delbtn" title="Delete">🗑</button>
     </div>`;
   head.querySelector("#mtitle").onclick = () => beginRename(m);
-  head.querySelector("#exportbtn").onclick = (e) => openExportMenu(e, m);
+  head.querySelector("#exportbtn").onclick = () => openExportDialog(m);
   head.querySelector("#sharebtn").onclick = () => toggleSharePanel(m);
   head.querySelector("#delbtn").onclick = () => deleteMeeting(m);
 }
@@ -239,20 +256,48 @@ function beginRename(m) {
   input.onkeydown = (e) => { if (e.key === "Enter") input.blur(); if (e.key === "Escape") renderMidHead(m); };
 }
 
-function openExportMenu(ev, m) {
-  document.getElementById("exportmenu")?.remove();
-  const menu = node(`<div id="exportmenu" class="fs-card" style="position:absolute;z-index:40;padding:6px;min-width:160px;box-shadow:var(--fs-shadow-md)">
-    ${["txt", "md", "json"].map((f) => `<button class="fs-btn fs-btn--ghost fs-btn--sm exp" data-f="${f}" style="width:100%;justify-content:flex-start">Export .${f}</button>`).join("")}
-  </div>`);
-  document.body.appendChild(menu);
-  const r = ev.target.getBoundingClientRect();
-  menu.style.top = r.bottom + 6 + "px";
-  menu.style.left = r.left + "px";
-  menu.querySelectorAll(".exp").forEach((b) => b.onclick = () => {
-    window.open("/api/meetings/" + m.id + "/export?format=" + b.dataset.f + "&include=both&timestamps=true", "_blank");
-    menu.remove();
-  });
-  setTimeout(() => document.addEventListener("click", function c(e) { if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener("click", c); } }), 0);
+function openExportDialog(m) {
+  document.getElementById("exportdlg")?.remove();
+  const hasTl = !!(m.translation && m.translation.output_language);
+  const dlg = node(`<div id="exportdlg" style="position:fixed;inset:0;z-index:60;background:rgba(27,26,23,.45);display:flex;align-items:center;justify-content:center;padding:24px">
+    <div class="fs-card" id="exportcard" style="width:380px;padding:22px;box-shadow:var(--fs-shadow-lg)">
+      <div style="font-weight:600;font-size:var(--fs-text-lg);margin-bottom:4px">Export transcript</div>
+      <div style="font-size:var(--fs-text-sm);color:var(--fs-ink-secondary);margin-bottom:16px">Choose what to include, then download.</div>
+      <div class="fs-field fs-field--block" style="margin-bottom:16px"><label class="fs-label">Format</label>
+        <select class="fs-select" id="exfmt">
+          <option value="txt">Plain text (.txt)</option>
+          <option value="md">Markdown (.md)</option>
+          <option value="json">JSON (.json)</option>
+        </select></div>
+      <label class="fs-switch is-on" id="exts" style="display:flex;margin-bottom:12px"><span class="fs-switch__track"><span class="fs-switch__thumb"></span></span> Include timestamps</label>
+      <label class="fs-switch ${hasTl ? "is-on" : "is-disabled"}" id="extr" style="display:flex;margin-bottom:6px"><span class="fs-switch__track"><span class="fs-switch__thumb"></span></span> Include translation</label>
+      ${hasTl ? "" : `<div style="font-size:var(--fs-text-xs);color:var(--fs-ink-muted);margin-bottom:8px">No translation configured for this meeting.</div>`}
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px">
+        <button class="fs-btn fs-btn--ghost fs-btn--sm" id="excancel">Cancel</button>
+        <button class="fs-btn fs-btn--primary fs-btn--sm" id="exgo">Export</button>
+      </div>
+    </div></div>`);
+  document.body.appendChild(dlg);
+  const close = () => { dlg.remove(); document.removeEventListener("keydown", onEsc); };
+  const onEsc = (e) => { if (e.key === "Escape") close(); };
+  document.addEventListener("keydown", onEsc);
+  dlg.onclick = close; // backdrop
+  dlg.querySelector("#exportcard").onclick = (e) => e.stopPropagation();
+  const ts = dlg.querySelector("#exts");
+  ts.onclick = () => ts.classList.toggle("is-on");
+  const tr = dlg.querySelector("#extr");
+  if (hasTl) tr.onclick = () => tr.classList.toggle("is-on");
+  dlg.querySelector("#excancel").onclick = close;
+  dlg.querySelector("#exgo").onclick = () => {
+    const fmt = dlg.querySelector("#exfmt").value;
+    const timestamps = ts.classList.contains("is-on");
+    const include = (hasTl && tr.classList.contains("is-on")) ? "both" : "transcript";
+    window.open(
+      `/api/meetings/${m.id}/export?format=${fmt}&include=${include}&timestamps=${timestamps}`,
+      "_blank",
+    );
+    close();
+  };
 }
 
 function toggleSharePanel(m) {
@@ -306,9 +351,11 @@ function toggleTlConfig(m) {
     <div style="font-weight:600;margin-bottom:12px">Translation</div>
     <label class="fs-switch ${t.enabled ? "is-on" : ""}" id="tlsw" style="margin-bottom:14px"><span class="fs-switch__track"><span class="fs-switch__thumb"></span></span> Enabled</label>
     <div class="fs-field fs-field--block" style="margin-bottom:12px"><label class="fs-label">Output language</label>
-      <select class="fs-select" id="tllang">${["", "en", "de", "fa"].map((l) => `<option value="${l}" ${l === (t.output_language || "") ? "selected" : ""}>${l ? l : "—"}</option>`).join("")}</select></div>
+      <select class="fs-select" id="tllang">${langOptions(t.output_language)}</select></div>
+    <div class="fs-field fs-field--block" style="margin-bottom:12px"><label class="fs-label">Model</label>
+      <select class="fs-select" id="tlmodel">${modelOptions(t.model)}</select></div>
     <button class="fs-btn fs-btn--primary fs-btn--sm" id="tlsave" style="width:100%">Save</button>
-    <div style="font-size:var(--fs-text-xs);color:var(--fs-ink-muted);margin-top:10px">Uses your Anthropic key. Applies to the next session + on-demand lines.</div></div>`);
+    <div style="font-size:var(--fs-text-xs);color:var(--fs-ink-muted);margin-top:10px">Uses your Anthropic key. Translating to the spoken language is skipped — pick a different output language. Applies to the next session + on-demand lines.</div></div>`);
   document.body.appendChild(panel);
   const sw = panel.querySelector("#tlsw");
   sw.onclick = () => sw.classList.toggle("is-on");
@@ -317,6 +364,7 @@ function toggleTlConfig(m) {
       const upd = await api("PUT", "/meetings/" + m.id + "/translation", {
         enabled: sw.classList.contains("is-on"),
         output_language: panel.querySelector("#tllang").value || null,
+        model: panel.querySelector("#tlmodel").value || null,
       });
       Object.assign(m, upd); meetings = meetings.map((x) => x.id === m.id ? upd : x);
       renderTlHead(upd); panel.remove(); toast("Translation updated");
@@ -344,10 +392,15 @@ function addSegment(s) {
   // translation row (right column), keyed by segment, kept in the same order
   let trow = tl.querySelector(`[data-seg="${id}"]`);
   const tr = (s.translations || []).find((t) => t.text || t.status);
+  const outLang = meetings.find((x) => x.id === selId)?.translation?.output_language;
+  const sameLang = outLang && s.source_language && outLang === s.source_language;
   let inner;
   if (tr && tr.status === "ok" && tr.text) {
     const rtlT = isRtl(tr.target_language);
     inner = `<div class="m-line__time">${esc(clockOf(s))}</div><div class="m-line__text" ${rtlT ? 'dir="rtl"' : ""}>${esc(tr.text)}</div><div></div>`;
+  } else if (sameLang) {
+    // Output language equals the spoken language — nothing to translate (not a failure).
+    inner = `<div class="m-line__time"></div><div class="m-tl__nokey" style="opacity:.6">— already ${esc(outLang)}</div><div></div>`;
   } else if (tr && tr.status === "failed") {
     inner = `<div class="m-line__time"></div><div class="m-tl__failed">translation failed <button class="fs-tl__retry" data-retry="${id}">retry</button></div><div></div>`;
   } else {
@@ -478,13 +531,15 @@ function drawTab(i) {
     b.innerHTML = `<div class="fs-card" style="padding:8px 20px">
       <div class="m-srow"><div><div class="m-srow__label">Translate new meetings by default</div><div class="m-srow__desc">Applied when a meeting starts; you can override per meeting.</div></div>
         <div class="m-srow__control"><label class="fs-switch ${d.default_translation_on ? "is-on" : ""}" id="dsw"><span class="fs-switch__track"><span class="fs-switch__thumb"></span></span></label></div></div>
-      <div class="m-srow"><div><div class="m-srow__label">Default output language</div></div>
-        <div class="m-srow__control"><select class="fs-select" id="dlang">${["", "en", "de", "fa"].map((l) => `<option value="${l}" ${l === (d.default_output_language || "") ? "selected" : ""}>${l || "—"}</option>`).join("")}</select></div></div>
+      <div class="m-srow"><div><div class="m-srow__label">Default output language</div><div class="m-srow__desc">Translating to the spoken language is skipped — pick a different one.</div></div>
+        <div class="m-srow__control"><select class="fs-select" id="dlang">${langOptions(d.default_output_language)}</select></div></div>
+      <div class="m-srow"><div><div class="m-srow__label">Default model</div><div class="m-srow__desc">Anthropic model used for translation.</div></div>
+        <div class="m-srow__control"><select class="fs-select" id="dmodel">${modelOptions(d.default_model)}</select></div></div>
       <div class="m-srow"><div></div><div class="m-srow__control"><button class="fs-btn fs-btn--primary fs-btn--sm" id="dsave">Save defaults</button></div></div></div>`;
     const sw = b.querySelector("#dsw");
     sw.onclick = () => sw.classList.toggle("is-on");
     b.querySelector("#dsave").onclick = async () => {
-      try { const upd = await api("PUT", "/me/settings", { default_translation_on: sw.classList.contains("is-on"), default_output_language: b.querySelector("#dlang").value || null }); Object.assign(me, upd); toast("Defaults saved"); }
+      try { const upd = await api("PUT", "/me/settings", { default_translation_on: sw.classList.contains("is-on"), default_output_language: b.querySelector("#dlang").value || null, default_model: b.querySelector("#dmodel").value || null }); Object.assign(me, upd); toast("Defaults saved"); }
       catch (e) { toast(e.detail || "Save failed", "error"); }
     };
   }

@@ -378,6 +378,12 @@ async def translate_segment(
         target = target_language or meeting.translation_output_language
         if not target:
             raise HTTPException(status_code=422, detail="no target language configured")
+        # Translating to the source language is a no-op, not a failure — say so clearly.
+        if segment.source_language and target == segment.source_language:
+            raise HTTPException(
+                status_code=422,
+                detail=f"already in {target} — choose a different output language",
+            )
         owner = (
             await repo.get_user_by_id(db, meeting.owner_id) if meeting.owner_id else None
         )
