@@ -1,7 +1,16 @@
 // Extension settings: configure the minutes server URL (domain or http://IP:port). The popup signs
 // in against this server. "Test connection" probes /healthz and reports reachable/signed-in state.
 const $ = (id) => document.getElementById(id);
-const norm = (u) => u.trim().replace(/\/+$/, "");
+
+// Reduce whatever the user pastes to a clean ORIGIN (scheme://host[:port]) — strips any path like
+// "/app" or "/api" and adds https:// if missing. This guarantees the popup builds /api/... against
+// the right base (a stray path was sending POSTs to the static landing -> HTTP 405).
+function norm(u) {
+  let s = (u || "").trim();
+  if (!s) return "";
+  if (!/^https?:\/\//i.test(s)) s = "https://" + s;
+  try { return new URL(s).origin; } catch { return ""; }
+}
 
 function chip(kind, label) {
   const ic = { ok: "✓", warn: "!", err: "✕" }[kind];

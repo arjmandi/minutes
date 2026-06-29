@@ -12,8 +12,11 @@ const PLATFORM = {
   meet: { label: "Google Meet", icon: "brand/icon-meet.svg" },
   teams: { label: "Microsoft Teams", icon: "brand/icon-teams.svg" },
 };
+// Defensive: always build API/WS URLs against the ORIGIN (strip any stray path on the saved base,
+// which would otherwise send /api/... to the static handler -> HTTP 405).
+const originOf = (base) => { try { return new URL(base).origin; } catch { return (base || "").replace(/\/+$/, ""); } };
 const hostOf = (base) => { try { return new URL(base).host; } catch { return base; } };
-const wsIngest = (base) => base.replace(/\/+$/, "").replace(/^http/, "ws") + "/ingest";
+const wsIngest = (base) => originOf(base).replace(/^http/, "ws") + "/ingest";
 
 function extractMeeting(url) {
   try {
@@ -89,9 +92,10 @@ async function signIn(base) {
     err.textContent = msg; err.style.display = "block";
     btn.disabled = false; btn.textContent = "Sign in";
   };
+  const target = originOf(base) + "/api/auth/login";
   let r;
   try {
-    r = await fetch(base.replace(/\/+$/, "") + "/api/auth/login", {
+    r = await fetch(target, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email: $("email").value.trim(), password: $("password").value, client: "device" }),
@@ -101,8 +105,10 @@ async function signIn(base) {
     return fail(`Couldn't reach ${host}. Check the Server URL in Settings (⚙).`);
   }
   if (!r.ok) {
+    if (r.status === 401) return fail("Invalid email or password.");
     let d; try { d = (await r.json()).detail; } catch { /* ignore */ }
-    return fail(d || (r.status === 401 ? "Invalid email or password" : `Sign-in failed (HTTP ${r.status})`));
+    // 404/405/3xx etc. mean we hit the host but not the minutes API — almost always a wrong URL.
+    return fail(d || `Sign-in failed (HTTP ${r.status}) at ${target}. Check the Server URL in Settings — it should be just https://your-domain (no /app or other path).`);
   }
   let data;
   try { data = await r.json(); } catch { data = {}; }
@@ -171,7 +177,7 @@ async function start() {
   const note = view.querySelector(".cap-note");
   if (note) note.textContent = "Authorizing…";
   try {
-    const r = await fetch(st.backendBase.replace(/\/+$/, "") + "/api/capture/token", {
+    const r = await fetch(originOf(st.backendBase) + "/api/capture/token", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: "Bearer " + st.deviceToken },
       body: JSON.stringify({ platform: meeting.platform, external_meeting_id: meeting.externalMeetingId }),
