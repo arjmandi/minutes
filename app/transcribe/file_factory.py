@@ -16,8 +16,11 @@ log = get_logger("transcribe")
 
 
 def make_file_transcriber(
-    *, api_key: str | None, language_hints: list[str] | None = None
+    *, api_key: str | None, language_hints: list[str] | None = None, base_url: str | None = None
 ) -> FileTranscriber:
     if api_key:
-        return SonioxFileTranscriber(api_key=api_key, language_hints=language_hints)
+        kwargs = {"api_key": api_key, "language_hints": language_hints}
+        if base_url:
+            kwargs["base_url"] = base_url  # region (EU/US) base from settings.soniox_file_base
+        return SonioxFileTranscriber(**kwargs)
     return FakeFileTranscriber(language_hints=language_hints)

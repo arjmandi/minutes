@@ -26,6 +26,7 @@ def make_transcriber_factory(settings: Settings) -> TranscriberFactory:
                 api_key=settings.soniox_api_key,
                 language_hints=settings.language_hints,
                 vocabulary=vocabulary,
+                url=settings.soniox_rt_url,
             )
         return FakeTranscriber(language_hints=settings.language_hints, vocabulary=vocabulary)
 

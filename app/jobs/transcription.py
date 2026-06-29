@@ -69,7 +69,9 @@ async def process_job(
             return
 
         transcriber = make_file_transcriber(
-            api_key=soniox_key, language_hints=settings.language_hints
+            api_key=soniox_key,
+            language_hints=settings.language_hints,
+            base_url=settings.soniox_file_base,
         )
         try:
             audio = await storage.download(job.s3_key)

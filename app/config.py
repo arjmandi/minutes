@@ -41,6 +41,10 @@ class Settings(BaseSettings):
 
     # External sub-processors
     soniox_api_key: str = ""
+    # Soniox data-residency region. "eu" routes STT to api.eu / stt-rt.eu .soniox.com so audio is
+    # processed in the EU — required for the EU-residency story. The API key must be from a project
+    # in the matching region (an EU key only works on EU endpoints, and vice-versa).
+    soniox_region: Literal["us", "eu"] = "us"
     anthropic_api_key: str = ""
 
     # Auth edge — capability tokens (spec v3 §15). The startup guard requires a strong,
@@ -86,6 +90,18 @@ class Settings(BaseSettings):
     # ge=1 floor: a 0/negative cutoff must never purge the whole dataset.
     retention_days: int = Field(default=90, ge=1)
     require_consent: bool = False  # when true, ingest refuses meetings without granted consent
+
+    @property
+    def soniox_rt_url(self) -> str:
+        """Real-time STT WebSocket URL for the configured region."""
+        host = "stt-rt.eu.soniox.com" if self.soniox_region == "eu" else "stt-rt.soniox.com"
+        return f"wss://{host}/transcribe-websocket"
+
+    @property
+    def soniox_file_base(self) -> str:
+        """Async (file) STT REST base for the configured region."""
+        host = "api.eu.soniox.com" if self.soniox_region == "eu" else "api.soniox.com"
+        return f"https://{host}/v1"
 
     @model_validator(mode="after")
     def _enforce_strong_secret_outside_dev(self) -> Settings:
