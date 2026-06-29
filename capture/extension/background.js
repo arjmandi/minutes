@@ -55,6 +55,7 @@ async function startCapture(tabId, config) {
   const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
   await ensureOffscreen();
   await chrome.runtime.sendMessage({ target: "offscreen", type: "start", streamId, config });
+  setRecording(true); // the offscreen doc now exists = capture is live (see hasDocument authority)
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -70,6 +71,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ ok: true });
       } else if (msg.type === "stop") {
         await chrome.runtime.sendMessage({ target: "offscreen", type: "stop" }).catch(() => {});
+        setRecording(false);
+        sendResponse({ ok: true });
+      } else if (msg.type === "capture-state") {
+        // Authoritative "is capture live" for the popup: an offscreen doc exists iff we're capturing.
+        sendResponse({ active: !!(await chrome.offscreen.hasDocument?.()) });
+      } else if (msg.type === "capture-ended") {
+        // Offscreen finished/failed -> close the doc so hasDocument() reflects reality, drop the icon.
+        try {
+          if (await chrome.offscreen.hasDocument?.()) await chrome.offscreen.closeDocument();
+        } catch {}
         setRecording(false);
         sendResponse({ ok: true });
       }

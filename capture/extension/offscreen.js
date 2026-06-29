@@ -15,6 +15,7 @@ let totalSamples = 0;
 let stopping = false;
 let frames = 0;
 let lastReportFrames = 0;
+let ended = false; // guards cleanup so teardown + the capture-ended signal fire exactly once
 
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.target !== "offscreen") return;
@@ -57,12 +58,15 @@ async function start(streamId, config) {
   frames = 0;
   lastReportFrames = 0;
   stopping = false;
+  ended = false;
+  setStatus("starting…", true); // mark capture live up front (popup also holds a startup grace)
   try {
     stream = await navigator.mediaDevices.getUserMedia({
       audio: { mandatory: { chromeMediaSource: "tab", chromeMediaSourceId: streamId } },
     });
   } catch (err) {
     setStatus("capture_failed: " + err, false);
+    cleanup();
     return;
   }
 
@@ -137,10 +141,15 @@ function stop() {
 }
 
 function cleanup() {
+  if (ended) return; // fire teardown + the capture-ended signal exactly once
+  ended = true;
   try { if (node) node.disconnect(); } catch {}
   try { if (source) source.disconnect(); } catch {}
   try { if (stream) stream.getTracks().forEach((t) => t.stop()); } catch {}
   try { if (ctx) ctx.close(); } catch {}
   try { if (ws) ws.close(); } catch {}
   ctx = ws = node = source = stream = null;
+  // Capture is over -> have the background close this offscreen doc (hasDocument()=false, icon idle).
+  // The popup's authority is that doc's existence, so this is what flips the popup back to idle.
+  chrome.runtime.sendMessage({ type: "capture-ended" }).catch(() => {});
 }

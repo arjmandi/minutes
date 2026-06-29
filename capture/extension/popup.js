@@ -65,6 +65,7 @@ async function init() {
   const st = await chrome.storage.local.get(["backendBase", "deviceToken", "deviceEmail", "minutesCapture"]);
   if (!st.backendBase) return renderNoServer();
   if (!st.deviceToken) return renderLogin(st);
+  st.__active = await isRecording();
   return renderCapture(st);
 }
 
@@ -142,7 +143,7 @@ async function signOut() {
 // ---------- signed-in: capture (idle / recording / no-meeting) ----------
 function renderCapture(st) {
   showFoot(st.deviceEmail);
-  const capturing = !!st.minutesCapture?.capturing;
+  const capturing = !!st.__active;
   lastCapturing = capturing;
 
   if (!meeting.platform) {
@@ -163,7 +164,7 @@ function renderCapture(st) {
     </div>`;
 
   if (capturing) {
-    const frames = (st.minutesCapture.status || "").match(/(\d[\d,]*)\s*frames/);
+    const frames = (st.minutesCapture?.status || "").match(/(\d[\d,]*)\s*frames/);
     view.innerHTML = `
       ${ctx}
       <div class="rec">
@@ -221,16 +222,13 @@ async function start() {
       },
     });
     if (!res?.ok) throw new Error(res?.error || "capture failed to start");
-    // Flip to the recording UI immediately — don't wait on the offscreen's first storage write
-    // (it lags the WS handshake, and a single storage.onChanged can be missed while the popup is
-    // mid-render). The poll below reconciles to the real state, incl. reverting if capture fails.
-    lastCapturing = true;
+    // Hold the recording UI through the startup window: the offscreen doc takes a beat to exist,
+    // so the authoritative hasDocument() reads false for ~1s. The grace bridges that; afterwards
+    // hasDocument() rules (and reverts to idle only if the capture genuinely failed).
+    enterGrace("rec");
     const full = await chrome.storage.local.get(["backendBase", "deviceEmail", "minutesCapture"]);
-    renderCapture({
-      backendBase: full.backendBase,
-      deviceEmail: full.deviceEmail,
-      minutesCapture: { capturing: true, status: full.minutesCapture?.status || "" },
-    });
+    full.__active = true;
+    renderCapture(full);
   } catch (e) {
     if (note) { note.textContent = e.message; note.classList.add("err"); }
   }
@@ -238,34 +236,45 @@ async function start() {
 
 async function stop() {
   await chrome.runtime.sendMessage({ type: "stop" });
-  // Render idle now (the offscreen writes capturing=false on stop); the poll reconciles.
-  lastCapturing = false;
+  // Hold idle through teardown (finalize + closeDocument take a beat before hasDocument() flips).
+  enterGrace("idle");
   init();
 }
 
-// Reconcile the popup to the real capture state: re-render on a start/stop transition, otherwise
-// just refresh the frame counter in place (no flicker). Shared by the live storage event AND the
-// poll, so the UI converges even when a single storage.onChanged is missed.
-function applyCapture(v) {
-  const cap = !!v?.capturing;
-  if (cap !== lastCapturing) { lastCapturing = cap; init(); return; }
-  if (cap) {
+// "Is capture live" comes from the background's offscreen doc, which exists for exactly the
+// capture's lifetime — robust against the offscreen's storage-write lag (the old false-revert bug).
+// Right after the user starts/stops, a short grace holds the optimistic state so createDocument /
+// teardown latency can't flip the button; after the grace, hasDocument() is authoritative.
+let graceUntil = 0;
+let graceState = "idle";
+function enterGrace(state) { graceState = state; graceUntil = Date.now() + 6000; }
+
+async function captureActive() {
+  try { const r = await chrome.runtime.sendMessage({ type: "capture-state" }); return !!r?.active; }
+  catch { return false; }
+}
+async function isRecording() {
+  if (Date.now() < graceUntil) return graceState === "rec";
+  return captureActive();
+}
+
+// Converge the popup to the real state; refresh the frame counter in place when unchanged (no flicker).
+async function reconcile() {
+  const st = await chrome.storage.local.get(["minutesCapture", "deviceToken", "backendBase"]);
+  if (!st.deviceToken || !st.backendBase) return;
+  const active = await isRecording();
+  if (active !== lastCapturing) { lastCapturing = active; init(); return; }
+  if (active) {
     const fr = view.querySelector(".rec__frames");
-    const m = (v?.status || "").match(/(\d[\d,]*)\s*frames/);
+    const m = (st.minutesCapture?.status || "").match(/(\d[\d,]*)\s*frames/);
     if (fr) fr.textContent = m ? "frames " + m[1] : "live";
   }
 }
 
-// Live status pushed from the offscreen doc (~1/s while recording).
+// The offscreen's per-second status write nudges the frame counter; the poll owns state transitions.
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && changes.minutesCapture) applyCapture(changes.minutesCapture.newValue);
+  if (area === "local" && changes.minutesCapture) reconcile();
 });
-
-// Fallback for a missed storage event: poll while the popup is open so it always converges to
-// reality (and reverts an optimistic "recording" if the capture actually failed to connect).
-setInterval(async () => {
-  const st = await chrome.storage.local.get(["minutesCapture", "deviceToken", "backendBase"]);
-  if (st.deviceToken && st.backendBase) applyCapture(st.minutesCapture);
-}, 1200);
+setInterval(reconcile, 1200);
 
 init();
