@@ -520,13 +520,24 @@ function drawTab(i) {
     };
   } else if (i === 1) {
     const ks = me.keys_set || {};
+    const region = me.soniox_region || "us";
     b.innerHTML = `<div class="fs-card" style="padding:8px 20px">
       <div class="m-srow"><div><div class="m-srow__label">Soniox API key</div><div class="m-srow__desc">Speech-to-text. ${ks.soniox ? "✓ set" : "Not set — required for uploads."}</div></div>
         <div class="m-srow__control"><input class="fs-input" id="sk" type="password" placeholder="${ks.soniox ? "•••• replace" : "sk-…"}" /><button class="fs-btn fs-btn--primary fs-btn--sm" id="sksave">Save</button></div></div>
+      <div class="m-srow"><div><div class="m-srow__label">Soniox region</div><div class="m-srow__desc">Where your audio is processed. Must match your key's project region — <b>EU</b> keeps audio in the EU.</div></div>
+        <div class="m-srow__control"><select class="fs-select" id="sregion">
+          <option value="us"${region === "us" ? " selected" : ""}>United States · api.soniox.com</option>
+          <option value="eu"${region === "eu" ? " selected" : ""}>European Union · api.eu.soniox.com</option>
+        </select></div></div>
       <div class="m-srow"><div><div class="m-srow__label">Anthropic API key</div><div class="m-srow__desc">Translation. ${ks.anthropic ? "✓ set" : "Translation is off until set."}</div></div>
         <div class="m-srow__control"><input class="fs-input" id="ak" type="password" placeholder="${ks.anthropic ? "•••• replace" : "sk-ant-…"}" /><button class="fs-btn fs-btn--primary fs-btn--sm" id="aksave">Save</button></div></div></div>`;
     b.querySelector("#sksave").onclick = () => saveKey("soniox_key", b.querySelector("#sk"));
     b.querySelector("#aksave").onclick = () => saveKey("anthropic_key", b.querySelector("#ak"));
+    const sr = b.querySelector("#sregion");
+    sr.onchange = async () => {
+      try { const upd = await api("PUT", "/me/keys", { soniox_region: sr.value }); me.soniox_region = upd.soniox_region || sr.value; toast("Region saved — " + (sr.value === "eu" ? "EU" : "US")); }
+      catch (e) { toast(e.detail || "Save failed", "error"); sr.value = region; }
+    };
   } else if (i === 2) {
     const d = me;
     b.innerHTML = `<div class="fs-card" style="padding:8px 20px">
@@ -559,7 +570,7 @@ function drawTab(i) {
 }
 async function saveKey(field, input) {
   if (!input.value.trim()) return;
-  try { const upd = await api("PUT", "/me/keys", { [field]: input.value.trim() }); me.keys_set = upd.keys_set || me.keys_set; toast("Key saved"); drawTab(1); }
+  try { const upd = await api("PUT", "/me/keys", { [field]: input.value.trim() }); me.keys_set = upd.keys_set || me.keys_set; if (upd.soniox_region) me.soniox_region = upd.soniox_region; toast("Key saved"); drawTab(1); }
   catch (e) { toast(e.detail || "Save failed", "error"); }
 }
 

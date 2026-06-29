@@ -33,6 +33,7 @@ from app.logging import get_logger
 from app.session.adapter import ClientCaptureAdapter
 from app.session.events import EndReason
 from app.session.manager import SessionManager
+from app.transcribe.resolve import build_user_transcriber_factory
 from app.translate.base import Translator
 from app.translate.resolve import build_user_translator
 
@@ -76,6 +77,24 @@ async def _resolve_meeting_translation(
             return state.translator_factory(None), []  # prod, no key -> no live translation
         translator = state.translator_factory(None)  # dev/test: key-less fake
     return translator, targets
+
+
+async def _resolve_transcriber_factory(
+    state, settings: Settings, platform: str, external_meeting_id: str
+):
+    """Per-user transcriber factory for this session: the meeting owner's Soniox key + region (so
+    audio is processed on their key, in their data-residency region). Falls back to the server/fake
+    factory when the owner has no key (dev/test, or deploys using a shared server key)."""
+    async with state.session_factory() as db:
+        meeting = await repo.get_meeting_by_identity(
+            db, platform=platform, external_meeting_id=external_meeting_id
+        )
+        owner = (
+            await repo.get_user_by_id(db, meeting.owner_id)
+            if meeting and meeting.owner_id
+            else None
+        )
+    return build_user_transcriber_factory(owner, settings=settings) or state.transcriber_factory
 
 
 @router.websocket("/ingest")
@@ -151,11 +170,14 @@ async def ingest_ws(ws: WebSocket) -> None:
         translator, targets = await _resolve_meeting_translation(
             ws.app.state, settings, platform, external_meeting_id
         )
+        transcriber_factory = await _resolve_transcriber_factory(
+            ws.app.state, settings, platform, external_meeting_id
+        )
         adapter = ClientCaptureAdapter(platform, external_meeting_id, call_id)
         manager = SessionManager(
             session_factory=ws.app.state.session_factory,
             redis=ws.app.state.redis,
-            transcriber_factory=ws.app.state.transcriber_factory,
+            transcriber_factory=transcriber_factory,
             translator_factory=lambda _vocab=None: translator,
             translation_targets=targets,
             storage=ws.app.state.storage,

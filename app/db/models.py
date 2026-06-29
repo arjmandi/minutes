@@ -276,6 +276,9 @@ class User(Base):
     # Per-user provider keys, AES-GCM encrypted at rest (app/crypto.py). NULL = not set.
     soniox_key_enc: Mapped[str | None] = mapped_column(Text())
     anthropic_key_enc: Mapped[str | None] = mapped_column(Text())
+    # Soniox data-residency region for THIS user's key ("us" | "eu"). NULL -> "us". The key must be
+    # from a project in the matching region; the user sets both together (admin doesn't intervene).
+    soniox_region: Mapped[str | None] = mapped_column(String(8))
     # Translation defaults applied when a meeting starts (per-meeting config can override later).
     default_translation_on: Mapped[bool] = mapped_column(default=False, nullable=False)
     default_output_language: Mapped[str | None] = mapped_column(String(16))

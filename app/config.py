@@ -17,6 +17,18 @@ DEFAULT_SECRET_KEY = "dev-insecure-encryption-key-change-me-in-real-envs"
 DEV_ENVS = frozenset({"local", "dev", "test"})
 
 
+def soniox_rt_url(region: str | None) -> str:
+    """Real-time STT WebSocket URL for a Soniox region ("eu" -> EU residency, else US)."""
+    host = "stt-rt.eu.soniox.com" if region == "eu" else "stt-rt.soniox.com"
+    return f"wss://{host}/transcribe-websocket"
+
+
+def soniox_file_base(region: str | None) -> str:
+    """Async (file) STT REST base for a Soniox region ("eu" -> EU residency, else US)."""
+    host = "api.eu.soniox.com" if region == "eu" else "api.soniox.com"
+    return f"https://{host}/v1"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="MINUTES_",
@@ -41,9 +53,9 @@ class Settings(BaseSettings):
 
     # External sub-processors
     soniox_api_key: str = ""
-    # Soniox data-residency region. "eu" routes STT to api.eu / stt-rt.eu .soniox.com so audio is
-    # processed in the EU — required for the EU-residency story. The API key must be from a project
-    # in the matching region (an EU key only works on EU endpoints, and vice-versa).
+    # Region for the FALLBACK server-wide Soniox key (below). Each user normally brings their own
+    # key + region (see User.soniox_region); this only applies to the shared server key used in
+    # dev/test or deploys without per-user keys. "eu" -> api.eu / stt-rt.eu .soniox.com.
     soniox_region: Literal["us", "eu"] = "us"
     anthropic_api_key: str = ""
 
@@ -93,15 +105,13 @@ class Settings(BaseSettings):
 
     @property
     def soniox_rt_url(self) -> str:
-        """Real-time STT WebSocket URL for the configured region."""
-        host = "stt-rt.eu.soniox.com" if self.soniox_region == "eu" else "stt-rt.soniox.com"
-        return f"wss://{host}/transcribe-websocket"
+        """Real-time STT WebSocket URL for the server-key fallback region."""
+        return soniox_rt_url(self.soniox_region)
 
     @property
     def soniox_file_base(self) -> str:
-        """Async (file) STT REST base for the configured region."""
-        host = "api.eu.soniox.com" if self.soniox_region == "eu" else "api.soniox.com"
-        return f"https://{host}/v1"
+        """Async (file) STT REST base for the server-key fallback region."""
+        return soniox_file_base(self.soniox_region)
 
     @model_validator(mode="after")
     def _enforce_strong_secret_outside_dev(self) -> Settings:

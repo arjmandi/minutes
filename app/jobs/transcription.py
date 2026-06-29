@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 
-from app.config import DEV_ENVS, Settings, get_settings
+from app.config import DEV_ENVS, Settings, get_settings, soniox_file_base
 from app.crypto import decrypt
 from app.db import repo
 from app.db.base import make_engine, make_session_factory
@@ -68,10 +68,13 @@ async def process_job(
             await _fail(factory, job.id, "no Soniox API key configured for the owner")
             return
 
+        # The owner's region travels with their key (data residency); fall back to the server
+        # region only when using the shared server key (no per-user key, dev/test).
+        region = owner.soniox_region if soniox_key else settings.soniox_region
         transcriber = make_file_transcriber(
             api_key=soniox_key,
             language_hints=settings.language_hints,
-            base_url=settings.soniox_file_base,
+            base_url=soniox_file_base(region),
         )
         try:
             audio = await storage.download(job.s3_key)

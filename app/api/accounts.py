@@ -46,6 +46,7 @@ class PasswordChangeBody(BaseModel):
 class KeysBody(BaseModel):
     soniox_key: str | None = None
     anthropic_key: str | None = None
+    soniox_region: Literal["us", "eu"] | None = None  # data residency for THIS user's Soniox key
 
 
 class SettingsBody(BaseModel):
@@ -77,6 +78,7 @@ def _user_public(user: User) -> dict:
         "default_translation_on": user.default_translation_on,
         "default_output_language": user.default_output_language,
         "default_model": user.default_model,
+        "soniox_region": user.soniox_region or "us",
         "keys_set": {
             "soniox": bool(user.soniox_key_enc),
             "anthropic": bool(user.anthropic_key_enc),
@@ -258,12 +260,15 @@ async def set_keys(
                 crypto.encrypt(body.anthropic_key, secret=settings.secret_key, aad=str(current.id))
                 if body.anthropic_key else None
             )
+        if "soniox_region" in fields:
+            current.soniox_region = body.soniox_region
         await db.commit()
         keys_set = {
             "soniox": bool(current.soniox_key_enc),
             "anthropic": bool(current.anthropic_key_enc),
         }
-    return {"keys_set": keys_set}
+        region = current.soniox_region or "us"
+    return {"keys_set": keys_set, "soniox_region": region}
 
 
 @router.put("/me/settings")
