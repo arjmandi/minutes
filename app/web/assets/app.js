@@ -145,8 +145,11 @@ function renderApp() {
     </div>
     <div class="m-body">
       <div class="m-col m-col--nav">
-        <div class="m-col__head"><span class="m-col__title">Meetings</span>
-          <button class="fs-btn fs-btn--sm fs-btn--ghost" id="uploadbtn" title="Upload audio">↑ Upload</button>
+        <div class="m-col__head"><span class="m-col__title">Transcriptions</span>
+          <div style="display:flex;gap:6px;align-items:center">
+            <button class="fs-btn fs-btn--sm fs-btn--ghost fs-btn--icon" id="reloadbtn" title="Reload transcriptions" aria-label="Reload transcriptions"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg></button>
+            <button class="fs-btn fs-btn--sm fs-btn--ghost" id="uploadbtn" title="Upload audio">↑ Upload</button>
+          </div>
         </div>
         <div class="m-col__scroll" id="meetinglist"></div>
         <input type="file" id="fileinput" accept="audio/*,video/*" style="display:none" />
@@ -164,6 +167,7 @@ function renderApp() {
   root.querySelector("#acct").onclick = openAccountMenu;
   root.querySelector("#uploadbtn").onclick = () => root.querySelector("#fileinput").click();
   root.querySelector("#fileinput").onchange = onUpload;
+  root.querySelector("#reloadbtn").onclick = reloadMeetings;
   renderMeetingList();
   if (selId) {
     const m = meetings.find((x) => x.id === selId);
@@ -191,7 +195,7 @@ function renderMeetingList() {
   const list = root.querySelector("#meetinglist");
   if (!list) return;
   if (!meetings.length) {
-    list.innerHTML = `<div class="m-empty" style="padding:24px"><div class="m-empty__sub">No meetings yet. Join a call with the extension, or upload audio.</div></div>`;
+    list.innerHTML = `<div class="m-empty" style="padding:24px"><div class="m-empty__sub">No transcriptions yet. Capture a tab with the extension, or upload audio.</div></div>`;
     return;
   }
   list.innerHTML = "";
@@ -202,6 +206,18 @@ function renderMeetingList() {
       <div class="m-meeting__sub"><span class="m-meeting__status" style="color:var(--fs-ink-muted)"><span class="m-dot m-dot--idle"></span>${esc(m.platform)}</span><span>· ${esc(relTime(m.created_at))}</span></div></div></div>`);
     row.onclick = () => selectMeeting(m);
     list.appendChild(row);
+  }
+}
+
+// Refresh the transcriptions list from the server (the reload button next to the list title).
+async function reloadMeetings() {
+  const btn = root.querySelector("#reloadbtn");
+  if (btn) btn.classList.add("is-loading");
+  try {
+    await loadMeetings();
+    renderMeetingList();
+  } finally {
+    if (btn) btn.classList.remove("is-loading");
   }
 }
 
