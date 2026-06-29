@@ -484,22 +484,23 @@ async function onUpload(e) {
 
 // ============================================================ SETTINGS
 function renderSettings() {
-  const tabs = ["Account", "API keys", "Translation"];
+  const tabs = ["Account", "API keys", "Translation", "Danger zone"];
   root.querySelector(".m-body")?.remove();
-  let body = root.querySelector("#settingsbody");
   const shell = node(`<div class="m-body" id="settingswrap" style="display:block;overflow:auto">
-    <div style="max-width:680px;margin:0 auto;padding:32px 24px">
-      <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
+    <div style="max-width:720px;margin:0 auto;padding:32px 24px">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:22px">
         <button class="fs-btn fs-btn--ghost fs-btn--sm" id="backbtn">← Back</button>
-        <h2 style="margin:0;font-size:var(--fs-text-xl);font-weight:600">Settings</h2>
+        <h1 style="margin:0;font-size:var(--fs-text-2xl);font-weight:600;letter-spacing:-0.02em">Settings</h1>
       </div>
-      <div class="fs-tabs" id="stabs">${tabs.map((t, i) => `<button class="fs-tab ${i === 0 ? "is-active" : ""}" data-t="${i}">${t}</button>`).join("")}</div>
-      <div id="settingsbody" style="margin-top:20px"></div>
+      <div class="fs-tabs">
+        <div class="fs-tabs__list" id="stabs">${tabs.map((t, i) => `<button class="fs-tab ${i === 0 ? "is-selected" : ""}" data-t="${i}">${esc(t)}</button>`).join("")}</div>
+        <div id="settingsbody" style="margin-top:22px"></div>
+      </div>
     </div></div>`);
   root.appendChild(shell);
   shell.querySelector("#backbtn").onclick = () => renderApp();
   const tabsEl = shell.querySelectorAll(".fs-tab");
-  tabsEl.forEach((b) => b.onclick = () => { tabsEl.forEach((x) => x.classList.remove("is-active")); b.classList.add("is-active"); drawTab(+b.dataset.t); });
+  tabsEl.forEach((bn) => bn.onclick = () => { tabsEl.forEach((x) => x.classList.remove("is-selected")); bn.classList.add("is-selected"); drawTab(+bn.dataset.t); });
   drawTab(0);
 }
 function drawTab(i) {
@@ -526,7 +527,7 @@ function drawTab(i) {
         <div class="m-srow__control"><input class="fs-input" id="ak" type="password" placeholder="${ks.anthropic ? "•••• replace" : "sk-ant-…"}" /><button class="fs-btn fs-btn--primary fs-btn--sm" id="aksave">Save</button></div></div></div>`;
     b.querySelector("#sksave").onclick = () => saveKey("soniox_key", b.querySelector("#sk"));
     b.querySelector("#aksave").onclick = () => saveKey("anthropic_key", b.querySelector("#ak"));
-  } else {
+  } else if (i === 2) {
     const d = me;
     b.innerHTML = `<div class="fs-card" style="padding:8px 20px">
       <div class="m-srow"><div><div class="m-srow__label">Translate new meetings by default</div><div class="m-srow__desc">Applied when a meeting starts; you can override per meeting.</div></div>
@@ -541,6 +542,18 @@ function drawTab(i) {
     b.querySelector("#dsave").onclick = async () => {
       try { const upd = await api("PUT", "/me/settings", { default_translation_on: sw.classList.contains("is-on"), default_output_language: b.querySelector("#dlang").value || null, default_model: b.querySelector("#dmodel").value || null }); Object.assign(me, upd); toast("Defaults saved"); }
       catch (e) { toast(e.detail || "Save failed", "error"); }
+    };
+  } else {
+    // Danger zone
+    b.innerHTML = `<div class="fs-card" style="padding:8px 20px;border-color:var(--fs-danger,#c0392b)">
+      <div class="m-srow"><div><div class="m-srow__label" style="color:var(--fs-danger,#c0392b)">Delete account</div><div class="m-srow__desc">Permanently delete your account. Meetings you own become unowned (admins can still see them); this can't be undone.</div></div>
+        <div class="m-srow__control"><button class="fs-btn fs-btn--danger fs-btn--sm" id="delacct">Delete my account</button></div></div></div>`;
+    b.querySelector("#delacct").onclick = async () => {
+      const typed = prompt(`This permanently deletes your account (${me.email}). Type your email to confirm:`);
+      if (typed == null) return;
+      if (typed.trim().toLowerCase() !== me.email.toLowerCase()) { toast("Email didn't match — not deleted.", "error"); return; }
+      try { await api("DELETE", "/me"); toast("Account deleted."); setTimeout(() => location.reload(), 800); }
+      catch (e) { toast(e.detail || "Delete failed", "error"); }
     };
   }
 }
