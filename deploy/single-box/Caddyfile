@@ -29,10 +29,9 @@
 	}
 
 	# Documentation site (Docusaurus static build, baseUrl /docs/, mounted at /srv/docs).
-	handle /docs {
-		redir /docs/ 308
-	}
-	handle /docs/* {
+	# root=/srv (no strip) so file_server canonicalizes /docs -> /docs/ and serves dir index.html
+	# with the full /docs prefix intact.
+	handle /docs* {
 		root * /srv
 		file_server
 	}
