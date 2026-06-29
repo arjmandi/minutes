@@ -1,0 +1,7 @@
+<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Microsoft Teams">
+  <rect width="32" height="32" rx="8" fill="#FBFAF6" stroke="#E2DFD5"></rect>
+  <rect x="9" y="11" width="9" height="10" rx="2" fill="#1B1A17"></rect>
+  <path d="M11 14H16M13.5 14V18.5" stroke="#FBFAF6" stroke-width="1.4" stroke-linecap="round"></path>
+  <circle cx="21" cy="13" r="3" fill="#DD5A1A"></circle>
+  <path d="M18.5 17.5C18.5 16.67 19.17 16 20 16H22.5C23.6 16 24.5 16.9 24.5 18V20C24.5 20.83 23.83 21.5 23 21.5H20C19.17 21.5 18.5 20.83 18.5 20V17.5Z" fill="#97948A"></path>
+</svg>

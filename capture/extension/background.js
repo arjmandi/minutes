@@ -4,12 +4,16 @@
 
 const OFFSCREEN_URL = "offscreen.html";
 
-// Recording indicator on the toolbar icon (red ● badge while capturing).
+// Toolbar icon reflects capture state: the designed idle vs recording marks (the recording mark
+// carries the red dot), so the icon itself is the indicator — no badge needed.
+const ICONS = {
+  idle: { 16: "icons/idle-16.png", 32: "icons/idle-32.png", 48: "icons/idle-48.png" },
+  recording: { 16: "icons/rec-16.png", 32: "icons/rec-32.png", 48: "icons/rec-48.png" },
+};
 function setRecording(on) {
   try {
-    chrome.action.setBadgeText({ text: on ? "●" : "" });
-    chrome.action.setBadgeBackgroundColor({ color: "#C0392B" });
-    chrome.action.setTitle({ title: on ? "minutes — recording" : "minutes capture" });
+    chrome.action.setIcon({ path: on ? ICONS.recording : ICONS.idle });
+    chrome.action.setTitle({ title: on ? "minutes — recording" : "minutes" });
   } catch { /* action API unavailable */ }
 }
 

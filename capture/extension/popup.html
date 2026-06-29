@@ -4,32 +4,46 @@
 <meta charset="utf-8" />
 <style>
   :root {
-    --ink: #1b1a17; --paper: #f4f2ec; --accent: #dd5a1a; --muted: #97948a;
-    --border: #e3e0d8; --surface: #fff; --ink2: #5a5750;
+    --ink: #1b1a17; --paper: #f4f2ec; --bg: #faf8f2; --accent: #dd5a1a; --muted: #97948a;
+    --border: #e3e0d8; --surface: #fff; --surface2: #f4f2ec; --ink2: #5a5750; --rec: #c0392b;
   }
   * { box-sizing: border-box; }
-  body { font: 13px "Space Grotesk", system-ui, sans-serif; width: 320px; margin: 0; background: var(--paper); color: var(--ink); }
-  .hd { display: flex; align-items: center; gap: 9px; padding: 13px 16px; border-bottom: 1px solid var(--border); background: var(--surface); }
-  .hd b { font-size: 15px; letter-spacing: -0.02em; }
-  .hd .who { flex: 1; text-align: right; font-family: "Geist Mono", ui-monospace, monospace; font-size: 10px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  body { font: 13px "Space Grotesk", system-ui, sans-serif; width: 320px; margin: 0; background: var(--bg); color: var(--ink); display: flex; flex-direction: column; min-height: 200px; }
+  .hd { display: flex; align-items: center; gap: 9px; padding: 0 14px; height: 50px; flex: none; border-bottom: 1px solid var(--border); background: var(--surface); }
+  .hd b { font-size: 16px; letter-spacing: -0.02em; }
+  .hd .grow { flex: 1; }
   .logo { width: 24px; height: 24px; border-radius: 6px; flex: none; }
-  .body { padding: 14px 16px; }
-  label { display: block; font-weight: 600; margin: 10px 0 4px; font-size: 12px; }
+  .iconbtn { border: 0; background: transparent; color: var(--ink2); font-size: 16px; cursor: pointer; width: 30px; height: 30px; border-radius: 8px; }
+  .iconbtn:hover { background: var(--surface2); }
+  .body { flex: 1; padding: 16px 16px; display: flex; flex-direction: column; gap: 13px; }
+  .foot { flex: none; padding: 10px 16px; border-top: 1px solid var(--border); background: var(--surface2); font-family: "Geist Mono", ui-monospace, monospace; font-size: 11px; color: var(--muted); display: flex; align-items: center; justify-content: space-between; }
+  .foot a { color: var(--accent); cursor: pointer; font-weight: 600; }
+  label { display: block; font-weight: 600; margin: 0 0 4px; font-size: 12px; }
   input { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font: inherit; background: var(--surface); color: var(--ink); }
   input:focus { outline: 2px solid color-mix(in srgb, var(--accent) 35%, transparent); border-color: var(--accent); }
-  button { font: inherit; font-weight: 600; border: 0; border-radius: 8px; padding: 9px 14px; cursor: pointer; }
-  button:disabled { opacity: 0.5; cursor: default; }
-  .primary { background: var(--accent); color: #fff; width: 100%; }
-  .ghost { background: transparent; color: var(--ink2); }
-  .danger { background: transparent; color: #c0392b; }
-  .stop { background: #1b1a17; color: #fff; width: 100%; }
-  .row { display: flex; align-items: center; gap: 8px; }
-  .between { justify-content: space-between; }
-  .meeting { font-family: "Geist Mono", ui-monospace, monospace; font-size: 11px; color: var(--muted); }
-  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
-  .meter { display: flex; align-items: flex-end; gap: 3px; height: 30px; }
-  .meter i { width: 5px; border-radius: 3px; background: var(--border); height: 6px; }
-  .meter.on i { background: var(--accent); }
+  button.btn { font: inherit; font-weight: 600; border: 0; border-radius: 8px; padding: 9px 14px; cursor: pointer; width: 100%; }
+  button.btn:disabled { opacity: 0.45; cursor: default; }
+  .primary { background: var(--accent); color: #fff; }
+  .lg { padding: 12px 14px; font-size: 14px; }
+  .stop { background: var(--ink); color: var(--paper); }
+  .signin-note, .cap-note { font-size: 11px; color: var(--muted); text-align: center; }
+  .err { color: var(--rec); font-size: 12px; }
+  /* context card */
+  .ctx { display: flex; align-items: center; gap: 11px; padding: 11px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface); }
+  .ctx img { width: 30px; height: 30px; flex: none; }
+  .ctx__name { font-size: 13px; font-weight: 600; }
+  .ctx__id { font-family: "Geist Mono", ui-monospace, monospace; font-size: 11px; color: var(--muted); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+  /* recording row */
+  .rec { display: flex; align-items: center; justify-content: space-between; }
+  .rec__label { display: flex; align-items: center; gap: 8px; font-family: "Geist Mono", ui-monospace, monospace; font-size: 12px; color: var(--accent); font-weight: 600; }
+  .rec__frames { font-family: "Geist Mono", ui-monospace, monospace; font-size: 11px; color: var(--muted); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); display: inline-block; box-shadow: 0 0 0 0 rgba(221,90,26,.5); animation: pulse 1.8s ease-out infinite; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(221,90,26,.45); } 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+  /* level meter */
+  .meterwrap { display: flex; align-items: center; justify-content: center; height: 48px; }
+  .meter { display: flex; align-items: flex-end; gap: 3px; height: 34px; }
+  .meter i { width: 5px; border-radius: 3px; background: var(--accent); height: 6px; }
+  .meter.idle i { background: #d8d5cc; height: 6px !important; }
   .meter.on i:nth-child(1){height:40%;animation:eq .9s ease-in-out infinite}
   .meter.on i:nth-child(2){height:80%;animation:eq .9s ease-in-out -.15s infinite}
   .meter.on i:nth-child(3){height:100%;animation:eq .9s ease-in-out -.3s infinite}
@@ -37,20 +51,25 @@
   .meter.on i:nth-child(5){height:85%;animation:eq .9s ease-in-out -.6s infinite}
   .meter.on i:nth-child(6){height:50%;animation:eq .9s ease-in-out -.75s infinite}
   .meter.on i:nth-child(7){height:70%;animation:eq .9s ease-in-out -.9s infinite}
-  @keyframes eq { 0%,100%{transform:scaleY(.4)} 50%{transform:scaleY(1)} }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: #c0392b; display: inline-block; animation: blink 1.2s steps(2,end) infinite; }
-  @keyframes blink { 50% { opacity: 0.3; } }
-  #status { margin-top: 12px; font-size: 12px; color: var(--ink2); white-space: pre-wrap; min-height: 1.2em; }
-  .err { color: #c0392b; }
-  .hint { font-size: 11px; color: var(--muted); margin-top: 8px; line-height: 1.5; }
+  @keyframes eq { 0%,100% { transform: scaleY(.4); } 50% { transform: scaleY(1); } }
+  /* centered empty states */
+  .empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 13px; padding: 8px 0; }
+  .empty__icon { width: 40px; height: 40px; border-radius: 11px; background: var(--surface2); display: grid; place-items: center; font-size: 18px; color: var(--muted); }
+  .empty__title { font-size: 15px; font-weight: 600; }
+  .empty__sub { font-size: 13px; color: var(--ink2); line-height: 1.5; max-width: 240px; }
+  .signin-target { font-size: 13px; color: var(--ink2); }
+  .signin-target b { color: var(--ink); font-family: "Geist Mono", ui-monospace, monospace; font-weight: 500; }
 </style>
 </head>
 <body>
   <div class="hd">
     <svg class="logo" viewBox="0 0 64 64" fill="none"><rect width="64" height="64" rx="16" fill="#1B1A17"/><rect x="16" y="20" width="32" height="6" rx="3" fill="#DD5A1A"/><rect x="16" y="29" width="22" height="6" rx="3" fill="#F4F2EC"/><rect x="16" y="38" width="28" height="6" rx="3" fill="#97948A"/></svg>
-    <b>minutes</b><span class="who" id="who"></span>
+    <b>minutes</b>
+    <span class="grow"></span>
+    <button class="iconbtn" id="gear" title="Settings">⚙</button>
   </div>
   <div class="body" id="view"></div>
+  <div class="foot" id="foot" hidden></div>
   <script src="popup.js"></script>
 </body>
 </html>
