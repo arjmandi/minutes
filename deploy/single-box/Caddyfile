@@ -21,6 +21,9 @@
 		Referrer-Policy no-referrer
 	}
 
+	# Bare /docs -> /docs/ (so the static index resolves under the /docs/ baseUrl).
+	redir /docs /docs/ permanent
+
 	# Product app + API + capture/live WebSockets + SPA assets + public share viewer -> backend.
 	# (/docs is the documentation site below, not FastAPI's Swagger.)
 	@app path /app /app/* /api/* /assets/* /shared /shared/* /ingest /healthz /readyz
@@ -29,9 +32,8 @@
 	}
 
 	# Documentation site (Docusaurus static build, baseUrl /docs/, mounted at /srv/docs).
-	# root=/srv (no strip) so file_server canonicalizes /docs -> /docs/ and serves dir index.html
-	# with the full /docs prefix intact.
-	handle /docs* {
+	# root=/srv (no strip) so files resolve with the full /docs prefix intact.
+	handle /docs/* {
 		root * /srv
 		file_server
 	}
