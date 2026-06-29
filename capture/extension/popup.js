@@ -18,6 +18,14 @@ const originOf = (base) => { try { return new URL(base).origin; } catch { return
 const hostOf = (base) => { try { return new URL(base).host; } catch { return base; } };
 const wsIngest = (base) => originOf(base).replace(/^http/, "ws") + "/ingest";
 
+// Microsoft Teams web hosts: classic, the new teams.cloud.microsoft, personal, and GCC.
+const TEAMS_HOSTS = new Set([
+  "teams.microsoft.com",
+  "teams.cloud.microsoft",
+  "teams.live.com",
+  "teams.microsoft.us",
+]);
+
 function extractMeeting(url) {
   try {
     const u = new URL(url);
@@ -25,8 +33,10 @@ function extractMeeting(url) {
       const m = u.pathname.match(/([a-z]{3}-[a-z]{4}-[a-z]{3})/);
       return { platform: "meet", externalMeetingId: m ? m[1] : "" };
     }
-    if (u.hostname === "teams.microsoft.com") {
-      const m = decodeURIComponent(u.href).match(/(19:meeting_[^@]+@thread\.v2)/);
+    if (TEAMS_HOSTS.has(u.hostname)) {
+      // The classic URL embeds the thread id; the new teams.cloud.microsoft app does not, so the
+      // id may be empty here — start() then mints a per-capture id so recording still works.
+      const m = decodeURIComponent(u.href).match(/(19:meeting_[^@/]+@thread\.v2)/);
       return { platform: "teams", externalMeetingId: m ? m[1] : "" };
     }
   } catch { /* not a URL */ }
@@ -133,7 +143,7 @@ function renderCapture(st) {
   lastCapturing = capturing;
   const p = PLATFORM[meeting.platform];
 
-  if (!p || !meeting.externalMeetingId) {
+  if (!p) {
     view.innerHTML = `
       <div class="empty">
         <div style="display:flex;gap:8px;opacity:.5"><img src="brand/icon-meet.svg" width="30" height="30"/><img src="brand/icon-teams.svg" width="30" height="30"/></div>
@@ -147,7 +157,7 @@ function renderCapture(st) {
   const ctx = `
     <div class="ctx">
       <img src="${p.icon}" alt="" />
-      <div style="min-width:0"><div class="ctx__name">${esc(p.label)}</div><div class="ctx__id">${esc(meeting.externalMeetingId)}</div></div>
+      <div style="min-width:0"><div class="ctx__name">${esc(p.label)}</div><div class="ctx__id">${esc(meeting.externalMeetingId || "current call")}</div></div>
     </div>`;
 
   if (capturing) {
@@ -176,11 +186,14 @@ async function start() {
   const st = await chrome.storage.local.get(["backendBase", "deviceToken"]);
   const note = view.querySelector(".cap-note");
   if (note) note.textContent = "Authorizing…";
+  // The new Teams web app exposes no meeting id in the URL — mint a per-capture id so the meeting
+  // is still created + authorized. (Classic Teams + Meet keep their real id.)
+  const externalMeetingId = meeting.externalMeetingId || ("web-" + crypto.randomUUID().slice(0, 8));
   try {
     const r = await fetch(originOf(st.backendBase) + "/api/capture/token", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: "Bearer " + st.deviceToken },
-      body: JSON.stringify({ platform: meeting.platform, external_meeting_id: meeting.externalMeetingId }),
+      body: JSON.stringify({ platform: meeting.platform, external_meeting_id: externalMeetingId }),
     });
     if (r.status === 401) {
       await chrome.storage.local.remove(["deviceToken", "deviceEmail"]);
@@ -199,7 +212,7 @@ async function start() {
         backendUrl: wsIngest(st.backendBase),
         token,
         platform: meeting.platform,
-        externalMeetingId: meeting.externalMeetingId,
+        externalMeetingId,
         callId: crypto.randomUUID(),
       },
     });
