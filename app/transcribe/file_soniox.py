@@ -20,8 +20,9 @@ from app.transcribe.file_base import FileSegment
 log = get_logger("soniox_file")
 
 _BASE = "https://api.soniox.com/v1"
-_MODEL = "stt-async-v2"
+_MODEL = "stt-async-v5"  # Soniox async/file model (live-validated against the API)
 _SEGMENT_MARKERS = {"<end>", "<fin>"}
+_GAP_MS = 1200  # split a segment when the pause between tokens exceeds this (async has no <end>)
 
 
 class SonioxFileError(RuntimeError):
@@ -81,7 +82,11 @@ class SonioxFileTranscriber:
     async def _create(
         self, client: httpx.AsyncClient, file_id: str, hints: list[str]
     ) -> str:
-        body: dict = {"file_id": file_id, "model": self._model}
+        body: dict = {
+            "file_id": file_id,
+            "model": self._model,
+            "enable_language_identification": True,  # populate each token's `language` (en/de/fa)
+        }
         if hints:
             body["language_hints"] = hints
         resp = await client.post(
@@ -122,7 +127,13 @@ class SonioxFileTranscriber:
 
 
 def _tokens_to_segments(tokens: list[dict]) -> list[FileSegment]:
-    """Group Soniox tokens into segments, breaking on endpoint markers / speaker changes."""
+    """Group Soniox async tokens into segments.
+
+    Splits on endpoint markers (``<end>``/``<fin>``) if present, on a speaker change, and — since
+    the async transcript usually has no endpoint markers — on a pause longer than ``_GAP_MS`` so the
+    result is readable lines rather than one giant block. Only original (non-translation) tokens are
+    kept; their concatenated text preserves Soniox's own spacing.
+    """
     segments: list[FileSegment] = []
     buf: list[str] = []
     start_ms: int | None = None
@@ -146,16 +157,26 @@ def _tokens_to_segments(tokens: list[dict]) -> list[FileSegment]:
         buf, start_ms, end_ms = [], None, None
 
     for tok in tokens:
+        # Skip translation tokens (we keep the original transcript; translation is done by Claude).
+        if tok.get("translation_status") == "translation":
+            continue
         text = str(tok.get("text", ""))
-        tok_speaker = str(tok.get("speaker") or "mixed")
-        if buf and tok_speaker != speaker:
-            flush()
-        speaker = tok_speaker
         if text in _SEGMENT_MARKERS:
             flush()
             continue
+        tok_speaker = str(tok.get("speaker") or "mixed")
+        tok_start = tok.get("start_ms")
+        gap = (
+            buf
+            and end_ms is not None
+            and tok_start is not None
+            and (tok_start - end_ms) > _GAP_MS
+        )
+        if buf and (tok_speaker != speaker or gap):
+            flush()
+        speaker = tok_speaker
         if not buf:
-            start_ms = tok.get("start_ms")
+            start_ms = tok_start
             language = tok.get("language")
         buf.append(text)
         end_ms = tok.get("end_ms", end_ms)

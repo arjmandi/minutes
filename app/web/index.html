@@ -15,6 +15,12 @@
 <style>
   html, body { height: 100%; margin: 0; }
   #root { height: 100%; }
+  /* The app kit sets .m-col__scroll overflow:hidden (artboard); the live app must actually scroll
+     long transcripts/lists. min-height:0 lets the flex/grid column shrink so the scroller is bounded. */
+  .m-col { min-height: 0; }
+  .m-col__scroll { overflow-y: auto; overflow-x: hidden; }
+  /* Settings view (rendered into .m-body as a block) also scrolls. */
+  #settingswrap { overflow: auto; }
 </style>
 </head>
 <body>
