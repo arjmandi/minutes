@@ -81,26 +81,37 @@ function renderLogin(st) {
 
 async function signIn(base) {
   const err = $("err");
+  const host = hostOf(base);
   err.style.display = "none";
   const btn = $("signin");
   btn.disabled = true; btn.textContent = "Signing in…";
+  const fail = (msg) => {
+    err.textContent = msg; err.style.display = "block";
+    btn.disabled = false; btn.textContent = "Sign in";
+  };
+  let r;
   try {
-    const r = await fetch(base.replace(/\/+$/, "") + "/api/auth/login", {
+    r = await fetch(base.replace(/\/+$/, "") + "/api/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email: $("email").value.trim(), password: $("password").value, client: "device" }),
     });
-    if (!r.ok) {
-      let d; try { d = (await r.json()).detail; } catch { /* ignore */ }
-      throw new Error(d || (r.status === 401 ? "Invalid email or password" : "Sign-in failed"));
-    }
-    const data = await r.json();
-    await chrome.storage.local.set({ deviceToken: data.device_token, deviceEmail: data.email });
-    init();
-  } catch (e) {
-    err.textContent = e.message; err.style.display = "block";
-    btn.disabled = false; btn.textContent = "Sign in";
+  } catch {
+    // Network error / wrong or unreachable server URL — the most common cause of a "failed" login.
+    return fail(`Couldn't reach ${host}. Check the Server URL in Settings (⚙).`);
   }
+  if (!r.ok) {
+    let d; try { d = (await r.json()).detail; } catch { /* ignore */ }
+    return fail(d || (r.status === 401 ? "Invalid email or password" : `Sign-in failed (HTTP ${r.status})`));
+  }
+  let data;
+  try { data = await r.json(); } catch { data = {}; }
+  if (!data.device_token) {
+    // Reached something that isn't the minutes API (wrong URL / a proxy / the marketing page).
+    return fail(`Unexpected response from ${host}. Is the Server URL correct in Settings (⚙)?`);
+  }
+  await chrome.storage.local.set({ deviceToken: data.device_token, deviceEmail: data.email });
+  init();
 }
 
 async function signOut() {
