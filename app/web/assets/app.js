@@ -94,6 +94,11 @@ let meetings = [];
 let selId = null;
 let ws = null;
 const segOrder = []; // segment ids in display order for the open meeting
+// Dual-source: lines are tagged data-source and shown/hidden by CSS on the selected source — no
+// re-fetch / socket teardown on switch. seenSources tracks which sources this meeting has produced.
+let selectedSource = "tab";
+const seenSources = new Set();
+const SRC_LABEL = { tab: "Online stream", mic: "Host mic", upload: "Upload" };
 
 // ============================================================ LOGIN
 function renderLogin() {
@@ -228,6 +233,8 @@ async function selectMeeting(m) {
   renderMeetingList();
   if (ws) { ws.close(); ws = null; }
   segOrder.length = 0;
+  seenSources.clear();
+  selectedSource = "tab";
   const detail = await api("GET", "/meetings/" + m.id).catch(() => m);
   meetings = meetings.map((x) => (x.id === m.id ? detail : x));
   renderMidHead(detail);
@@ -240,14 +247,46 @@ async function selectMeeting(m) {
   try { segs = await api("GET", "/meetings/" + m.id + "/transcript"); } catch (e) { tx.innerHTML = `<div class="m-empty"><div class="m-empty__sub">${esc(e.detail || "Could not load transcript")}</div></div>`; return; }
   for (const s of segs) addSegment(s);
   if (!segs.length) tx.innerHTML = `<div class="m-empty"><div class="m-empty__sub">No transcript yet.</div></div>`;
+  // Default to the tab ("Online stream") source if present, else the first one seen.
+  if (!seenSources.has(selectedSource)) selectedSource = [...seenSources][0] || "tab";
+  renderSourceBar();
+  applySourceFilter();
   connectLive(m.id);
+}
+
+// Source selector (tab/mic) shown when a meeting has more than one source. Switching only flips a
+// CSS data-attribute — every line stays in the DOM tagged data-source, so there's no re-fetch.
+function renderSourceBar() {
+  const bar = root.querySelector("#srcbar");
+  if (!bar) return;
+  const srcs = [...seenSources];
+  if (srcs.length <= 1) { bar.innerHTML = ""; return; }
+  bar.innerHTML = `<div class="fs-segmented">${srcs
+    .map((s) => `<button class="fs-segmented__item ${s === selectedSource ? "is-selected" : ""}" data-src="${esc(s)}">${esc(SRC_LABEL[s] || s)}</button>`)
+    .join("")}</div>`;
+  bar.querySelectorAll("[data-src]").forEach((b) => (b.onclick = () => switchSource(b.dataset.src)));
+}
+
+function switchSource(src) {
+  selectedSource = src;
+  applySourceFilter();
+  renderSourceBar();
+}
+
+function applySourceFilter() {
+  const val = seenSources.size > 1 ? selectedSource : ""; // "" = show all (single source)
+  for (const id of ["#transcript", "#translation"]) {
+    const el = root.querySelector(id);
+    if (el) el.setAttribute("data-src", val);
+  }
 }
 
 function renderMidHead(m) {
   const head = root.querySelector("#midhead");
   head.innerHTML = `
     <span class="m-col__title" id="mtitle" title="Click to rename" style="cursor:text">${esc(m.title || m.external_meeting_id)}</span>
-    <div style="display:flex;gap:6px;align-items:center">
+    <span id="srcbar"></span>
+    <div style="display:flex;gap:6px;align-items:center;margin-left:auto">
       <button class="fs-btn fs-btn--sm fs-btn--ghost" id="exportbtn">Export</button>
       <button class="fs-btn fs-btn--sm fs-btn--ghost" id="sharebtn">Share</button>
       <button class="fs-btn fs-btn--sm fs-btn--ghost fs-btn--icon" id="delbtn" title="Delete">🗑</button>
@@ -256,6 +295,7 @@ function renderMidHead(m) {
   head.querySelector("#exportbtn").onclick = () => openExportDialog(m);
   head.querySelector("#sharebtn").onclick = () => toggleSharePanel(m);
   head.querySelector("#delbtn").onclick = () => deleteMeeting(m);
+  renderSourceBar();
 }
 
 function beginRename(m) {
@@ -286,6 +326,11 @@ function openExportDialog(m) {
           <option value="md">Markdown (.md)</option>
           <option value="json">JSON (.json)</option>
         </select></div>
+      ${seenSources.size > 1 ? `<div class="fs-field fs-field--block" style="margin-bottom:16px"><label class="fs-label">Audio source</label>
+        <select class="fs-select" id="exsrc">
+          <option value="both">Both sources</option>
+          ${[...seenSources].map((s) => `<option value="${esc(s)}">${esc(SRC_LABEL[s] || s)}</option>`).join("")}
+        </select></div>` : ""}
       <label class="fs-switch is-on" id="exts" style="display:flex;margin-bottom:12px"><span class="fs-switch__track"><span class="fs-switch__thumb"></span></span> Include timestamps</label>
       <label class="fs-switch ${hasTl ? "is-on" : "is-disabled"}" id="extr" style="display:flex;margin-bottom:6px"><span class="fs-switch__track"><span class="fs-switch__thumb"></span></span> Include translation</label>
       ${hasTl ? "" : `<div style="font-size:var(--fs-text-xs);color:var(--fs-ink-muted);margin-bottom:8px">No translation configured for this meeting.</div>`}
@@ -309,8 +354,10 @@ function openExportDialog(m) {
     const fmt = dlg.querySelector("#exfmt").value;
     const timestamps = ts.classList.contains("is-on");
     const include = (hasTl && tr.classList.contains("is-on")) ? "both" : "transcript";
+    const srcSel = dlg.querySelector("#exsrc");
+    const src = srcSel ? `&source=${encodeURIComponent(srcSel.value)}` : "";
     window.open(
-      `/api/meetings/${m.id}/export?format=${fmt}&include=${include}&timestamps=${timestamps}`,
+      `/api/meetings/${m.id}/export?format=${fmt}&include=${include}&timestamps=${timestamps}${src}`,
       "_blank",
     );
     close();
@@ -396,9 +443,10 @@ function addSegment(s) {
   if (tx.querySelector(".m-empty")) tx.innerHTML = "";
   const tl = root.querySelector("#translation");
   const id = s.id;
+  const src = s.source || "tab";
   let line = tx.querySelector(`[data-seg="${id}"]`);
   const rtl = isRtl(s.source_language);
-  const lineHtml = `<div class="m-line" data-seg="${id}" ${rtl ? 'dir="rtl"' : ""}>
+  const lineHtml = `<div class="m-line" data-seg="${id}" data-source="${esc(src)}" ${rtl ? 'dir="rtl"' : ""}>
     <div class="m-line__time">${esc(clockOf(s))}</div>
     <div class="m-line__text">${s.source_language ? `<span class="m-line__lang">${esc(s.source_language)}</span>` : ""}${esc(s.text)}</div>
     <div class="m-line__copy" title="Copy">${COPY_ICON}</div></div>`;
@@ -423,10 +471,13 @@ function addSegment(s) {
   } else {
     inner = `<div class="m-line__time"></div><div class="m-tl__ondemand"><span class="m-tl__link" data-retry="${id}">translate</span></div><div></div>`;
   }
-  const newTrow = node(`<div class="m-line" data-seg="${id}">${inner}</div>`);
+  const newTrow = node(`<div class="m-line" data-seg="${id}" data-source="${esc(src)}">${inner}</div>`);
   const retry = newTrow.querySelector("[data-retry]");
   if (retry) retry.onclick = () => translateLine(id);
   if (trow) trow.replaceWith(newTrow); else tl.appendChild(newTrow);
+
+  // First time we see this source -> reveal the source selector + (re)apply the filter.
+  if (!seenSources.has(src)) { seenSources.add(src); renderSourceBar(); applySourceFilter(); }
 }
 
 async function translateLine(segId) {
@@ -461,11 +512,13 @@ function connectLive(meetingId, attempt = 0) {
   sock.onmessage = (e) => {
     const ev = JSON.parse(e.data);
     if (selId !== meetingId) return;
-    if (ev.kind === "interim") { interim.style.display = "block"; interim.textContent = ev.text; }
-    else if (ev.kind === "final") {
-      interim.style.display = "none"; interim.textContent = "";
-      addSegment({ id: ev.id, text: ev.text, source_language: ev.language, start_ms: ev.start_ms, translations: [] });
-      const tx = root.querySelector("#transcript"); tx.scrollTop = tx.scrollHeight;
+    if (ev.kind === "interim") {
+      // Only the selected source's interim occupies the shared interim line.
+      if (!ev.source || ev.source === selectedSource) { interim.style.display = "block"; interim.textContent = ev.text; }
+    } else if (ev.kind === "final") {
+      if (!ev.source || ev.source === selectedSource) { interim.style.display = "none"; interim.textContent = ""; }
+      addSegment({ id: ev.id, text: ev.text, source_language: ev.language, start_ms: ev.start_ms, source: ev.source, translations: [] });
+      if ((ev.source || "tab") === selectedSource) { const tx = root.querySelector("#transcript"); tx.scrollTop = tx.scrollHeight; }
     } else if (ev.kind === "translation") {
       const tl = root.querySelector("#translation");
       const row = tl.querySelector(`[data-seg="${ev.segment_id}"]`);
@@ -601,8 +654,10 @@ async function saveKey(field, input) {
 const isMobile = () => window.matchMedia("(max-width: 760px)").matches;
 let mView = "list";      // list | detail | settings
 let mSeg = "tx";         // tx | tl  (which stream the detail shows)
-let mSegs = [];          // segments of the open meeting
+let mSource = "tab";     // tab | mic  (which source the detail shows, when >1)
+let mSegs = [];          // segments of the open meeting (each tagged .source)
 let mSettingsTab = 0;
+const mSeenSources = () => [...new Set(mSegs.map((s) => s.source || "tab"))];
 const M_BACK = `<svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M11 4 6 9l5 5"/></svg>`;
 const M_UP = `<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M10 13V4M6.5 7.5 10 4l3.5 3.5M4 14.5v1A1.5 1.5 0 0 0 5.5 17h9a1.5 1.5 0 0 0 1.5-1.5v-1"/></svg>`;
 const M_MORE = `<svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><circle cx="10" cy="4" r="1.6"/><circle cx="10" cy="10" r="1.6"/><circle cx="10" cy="16" r="1.6"/></svg>`;
@@ -678,12 +733,14 @@ function mRenderList() {
 }
 
 async function mOpenMeeting(m) {
-  selId = m.id; mView = "detail"; mSeg = "tx"; mSegs = [];
+  selId = m.id; mView = "detail"; mSeg = "tx"; mSource = "tab"; mSegs = [];
   if (ws) { ws.close(); ws = null; }
   const detail = await api("GET", "/meetings/" + m.id).catch(() => m);
   meetings = meetings.map((x) => (x.id === m.id ? detail : x));
   renderMobileDetail();
   try { mSegs = await api("GET", "/meetings/" + m.id + "/transcript"); } catch { mSegs = []; }
+  if (!mSeenSources().includes(mSource)) mSource = mSeenSources()[0] || "tab";
+  renderMobileDetail(); // sources known now -> render the source chips
   mRenderStream();
   mConnectLive(m.id);
 }
@@ -699,6 +756,9 @@ function renderMobileDetail() {
         <div class="mdhead__title"><b>${esc(m.title || m.external_meeting_id)}</b><span><span class="m-dot m-dot--idle"></span>${esc(m.platform)}</span></div>
         <button class="icon-btn" id="mdmore" aria-label="${mSeg === "tl" ? "Translation settings" : "More"}">${mSeg === "tl" ? M_GEAR : M_MORE}</button>
       </div>
+      ${mSeenSources().length > 1 ? `<div class="mchips" style="padding:0 12px 10px">
+        ${mSeenSources().map((s) => `<button class="mchip ${s === mSource ? "is-selected" : ""}" data-msrc="${esc(s)}">${esc(SRC_LABEL[s] || s)}</button>`).join("")}
+      </div>` : ""}
       <div class="mseg"><div class="mseg__track">
         <button class="mseg__item ${mSeg === "tx" ? "is-selected" : ""}" id="segtx">Transcript</button>
         <button class="mseg__item ${mSeg === "tl" ? "is-selected" : ""}" id="segtl">Translation ${lang ? `<span class="tgt">→ ${esc(lang)}</span>` : ""}</button>
@@ -710,6 +770,7 @@ function renderMobileDetail() {
   root.querySelector("#mback").onclick = () => { if (ws) { ws.close(); ws = null; } mView = "list"; renderMobileApp(); };
   root.querySelector("#segtx").onclick = () => { mSeg = "tx"; renderMobileDetail(); mRenderStream(); };
   root.querySelector("#segtl").onclick = () => { mSeg = "tl"; renderMobileDetail(); mRenderStream(); };
+  root.querySelectorAll("[data-msrc]").forEach((b) => (b.onclick = () => { mSource = b.dataset.msrc; renderMobileDetail(); mRenderStream(); }));
   root.querySelector("#mdmore").onclick = () => (mSeg === "tl" ? mTranslationSheet(m) : mActionsSheet(m));
 }
 
@@ -745,8 +806,10 @@ function mTrLine(s) {
 function mRenderStream() {
   const el = root.querySelector("#mstream");
   if (!el) return;
-  if (!mSegs.length) { el.innerHTML = `<div class="m-empty" style="padding:40px 0"><div class="m-empty__sub">No transcript yet.</div></div>`; return; }
-  el.innerHTML = mSegs.map((s) => (mSeg === "tx" ? mLine(s) : mTrLine(s))).join("");
+  const multi = mSeenSources().length > 1;
+  const segs = multi ? mSegs.filter((s) => (s.source || "tab") === mSource) : mSegs;
+  if (!segs.length) { el.innerHTML = `<div class="m-empty" style="padding:40px 0"><div class="m-empty__sub">No transcript yet.</div></div>`; return; }
+  el.innerHTML = segs.map((s) => (mSeg === "tx" ? mLine(s) : mTrLine(s))).join("");
   el.querySelectorAll("[data-retry]").forEach((b) => (b.onclick = () => mTranslateLine(b.getAttribute("data-retry"))));
   const sc = root.querySelector(".mob__scroll");
   if (sc) sc.scrollTop = sc.scrollHeight;
@@ -774,10 +837,15 @@ function mConnectLive(meetingId, attempt = 0) {
     if (selId !== meetingId) return;
     const interim = root.querySelector("#minterim");
     if (ev.kind === "interim") {
-      if (interim) { interim.style.display = "flex"; const t = root.querySelector("#minterimtxt"); if (t) t.textContent = ev.text; }
+      if (interim && (!ev.source || ev.source === mSource)) {
+        interim.style.display = "flex";
+        const t = root.querySelector("#minterimtxt"); if (t) t.textContent = ev.text;
+      }
     } else if (ev.kind === "final") {
-      if (interim) interim.style.display = "none";
-      mSegs.push({ id: ev.id, text: ev.text, source_language: ev.language, start_ms: ev.start_ms, translations: [] });
+      if (interim && (!ev.source || ev.source === mSource)) interim.style.display = "none";
+      const before = mSeenSources().length;
+      mSegs.push({ id: ev.id, text: ev.text, source_language: ev.language, start_ms: ev.start_ms, source: ev.source, translations: [] });
+      if (mSeenSources().length !== before) renderMobileDetail(); // reveal a new source chip
       mRenderStream();
     } else if (ev.kind === "translation") {
       const seg = mSegs.find((s) => s.id === ev.segment_id);
@@ -930,13 +998,26 @@ async function renderShared(token) {
     <div class="m-stream" id="sstream"></div>`;
   const stream = body.querySelector("#sstream");
   if (!segs.length) { stream.innerHTML = `<div class="m-empty__sub">No transcript content.</div>`; return; }
-  for (const s of segs) {
+  const lineHtml = (s) => {
     const rtl = isRtl(s.source_language);
     const tr = (s.translations || []).find((t) => t.target_language === lang && t.text);
-    stream.appendChild(node(`<div class="m-line" ${rtl ? 'dir="rtl"' : ""}>
+    return `<div class="m-line" ${rtl ? 'dir="rtl"' : ""}>
       <div class="m-line__time">${esc(clockOf(s))}</div>
       <div class="m-line__text">${s.source_language ? `<span class="m-line__lang">${esc(s.source_language)}</span>` : ""}${esc(s.text)}${tr ? `<div style="color:var(--fs-ink-secondary);margin-top:3px" ${isRtl(tr.target_language) ? 'dir="rtl"' : ""}>${esc(tr.text)}</div>` : ""}</div>
-      <div></div></div>`));
+      <div></div></div>`;
+  };
+  const sources = [...new Set(segs.map((s) => s.source || "tab"))];
+  if (sources.length <= 1) {
+    stream.innerHTML = segs.map(lineHtml).join(""); // single column — byte-identical to before
+  } else {
+    // Two labeled columns ("Online stream" + "Host mic"), each its own source's lines.
+    body.style.maxWidth = "1100px";
+    const order = ["tab", "mic", "upload"].filter((s) => sources.includes(s));
+    stream.className = "shared-cols";
+    stream.innerHTML = order
+      .map((src) => `<div class="shared-col"><div class="shared-col__h">${esc(SRC_LABEL[src] || src)}</div>
+        <div class="m-stream">${segs.filter((s) => (s.source || "tab") === src).map(lineHtml).join("")}</div></div>`)
+      .join("");
   }
 }
 

@@ -22,6 +22,17 @@
   .m-col__scroll { overflow-y: auto; overflow-x: hidden; }
   /* Settings view (rendered into .m-body as a block) also scrolls. */
   #settingswrap { overflow: auto; }
+  /* Dual-source: the source selector sets data-src on the transcript/translation columns; lines
+     are tagged data-source, so a switch just hides the other source's lines (no re-fetch). */
+  [data-src="tab"] .m-line[data-source]:not([data-source="tab"]),
+  [data-src="mic"] .m-line[data-source]:not([data-source="mic"]),
+  [data-src="upload"] .m-line[data-source]:not([data-source="upload"]) { display: none; }
+  #srcbar .fs-segmented { padding: 2px; }
+  #srcbar .fs-segmented__item { padding: 4px 10px; font-size: 12px; }
+  /* Two-column public share (Online stream / Host mic) when a meeting has two sources. */
+  .shared-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+  .shared-col__h { font-family: var(--fs-font-mono); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--fs-ink-muted); padding-bottom: 8px; border-bottom: 1px solid var(--fs-border); margin-bottom: 4px; }
+  @media (max-width: 760px) { .shared-cols { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
