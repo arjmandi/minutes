@@ -27,6 +27,7 @@ class SessionStarted:
     platform: str
     external_meeting_id: str
     call_id: str
+    source: str = "tab"  # capture source: "tab" | "mic" (dual-source); "upload" is server-set
 
 
 @dataclass(slots=True)

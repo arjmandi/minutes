@@ -37,11 +37,13 @@ class ClientCaptureAdapter:
         external_meeting_id: str,
         call_id: str,
         *,
+        source: str = "tab",
         maxsize: int = 256,
     ) -> None:
         self._platform = platform
         self._external_meeting_id = external_meeting_id
         self._call_id = call_id
+        self._source = source
         self._queue: asyncio.Queue[PcmFrame | _End] = asyncio.Queue(maxsize=maxsize)
 
     @property
@@ -68,7 +70,9 @@ class ClientCaptureAdapter:
                 pass
 
     async def events(self) -> AsyncIterator[Event]:
-        yield SessionStarted(self._platform, self._external_meeting_id, self._call_id)
+        yield SessionStarted(
+            self._platform, self._external_meeting_id, self._call_id, self._source
+        )
         while True:
             item = await self._queue.get()
             if isinstance(item, _End):

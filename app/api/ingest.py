@@ -140,21 +140,40 @@ async def ingest_ws(ws: WebSocket) -> None:
             await ws.send_json({"type": "error", "reason": "missing_fields"})
             await ws.close(code=_CLOSE_PROTOCOL)
             return
+        # Capture source (dual-source): default "tab" for legacy clients; "upload" is server-set.
+        source = hello.get("source", "tab")
+        if source not in ("tab", "mic"):
+            await ws.send_json({"type": "error", "reason": "invalid_source"})
+            await ws.close(code=_CLOSE_PROTOCOL)
+            return
 
         if not authorize_meeting(claims, platform, external_meeting_id):
             await ws.send_json({"type": "forbidden", "reason": "meeting_not_authorized"})
             await ws.close(code=_CLOSE_POLICY)
             return
 
-        if settings.require_consent:
-            async with ws.app.state.session_factory() as db:
-                meeting = await repo.get_meeting_by_identity(
-                    db, platform=platform, external_meeting_id=external_meeting_id
-                )
-            if meeting is None or meeting.consent_status != ConsentStatus.granted:
-                await ws.send_json({"type": "forbidden", "reason": "consent_required"})
-                await ws.close(code=_CLOSE_POLICY)
-                return
+        # Owner-binding + consent (one meeting fetch). A meeting owned by another user must not
+        # accept this principal's stream — closes the wildcard-token cross-user / second-source
+        # injection hole (a mic stream transcribed/billed on a victim's key). The capture-token flow
+        # mints owner-scoped tokens, so this only restricts wildcard tokens.
+        async with ws.app.state.session_factory() as db:
+            meeting = await repo.get_meeting_by_identity(
+                db, platform=platform, external_meeting_id=external_meeting_id
+            )
+        if (
+            meeting is not None
+            and meeting.owner_id is not None
+            and str(meeting.owner_id) != claims.principal
+        ):
+            await ws.send_json({"type": "forbidden", "reason": "not_owner"})
+            await ws.close(code=_CLOSE_POLICY)
+            return
+        if settings.require_consent and (
+            meeting is None or meeting.consent_status != ConsentStatus.granted
+        ):
+            await ws.send_json({"type": "forbidden", "reason": "consent_required"})
+            await ws.close(code=_CLOSE_POLICY)
+            return
 
         result = await registry.acquire(requested_call_id, owner)
         if result is AcquireResult.AT_CAPACITY:
@@ -173,7 +192,7 @@ async def ingest_ws(ws: WebSocket) -> None:
         transcriber_factory = await _resolve_transcriber_factory(
             ws.app.state, settings, platform, external_meeting_id
         )
-        adapter = ClientCaptureAdapter(platform, external_meeting_id, call_id)
+        adapter = ClientCaptureAdapter(platform, external_meeting_id, call_id, source=source)
         manager = SessionManager(
             session_factory=ws.app.state.session_factory,
             redis=ws.app.state.redis,
@@ -187,7 +206,8 @@ async def ingest_ws(ws: WebSocket) -> None:
         )
         run_task = asyncio.create_task(manager.run(adapter))
         await ws.send_json(
-            {"type": "admitted", "call_id": call_id, "worker_id": registry.worker_id}
+            {"type": "admitted", "call_id": call_id, "source": source,
+             "worker_id": registry.worker_id}
         )
         log.info("ingest.admitted", call_id=call_id, platform=platform, principal=claims.principal)
 
@@ -258,6 +278,15 @@ async def ingest_ws(ws: WebSocket) -> None:
                         "session_id": summary.session_id,
                         "segments": summary.segments,
                     }
+                )
+            except Exception:  # noqa: BLE001
+                pass
+        elif summary is not None and summary.error:
+            # A terminal failure (e.g. Soniox quota/billing) — tell the client so it can show a
+            # clear, actionable message ("check your Soniox plan / top up") and let the user retry.
+            try:
+                await ws.send_json(
+                    {"type": "error", "reason": "transcription_failed", "detail": summary.error}
                 )
             except Exception:  # noqa: BLE001
                 pass

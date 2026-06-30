@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from app import control, fanout
 from app.audio.wav import BYTES_PER_SECOND, wrap_pcm
 from app.db import repo
-from app.db.models import ChunkState, SessionStatus, TranslationStatus
+from app.db.models import CaptureSource, ChunkState, SessionStatus, TranslationStatus
 from app.logging import get_logger
 from app.session.adapter import ClientCaptureAdapter
 from app.session.events import AudioFrame, EndReason, SessionEnded, SessionStarted
@@ -45,6 +45,7 @@ class CallSummary:
     session_id: str | None
     segments: int
     reason: str
+    error: str | None = None  # a terminal failure detail to surface to the client (e.g. Soniox)
 
 
 class SessionManager:
@@ -111,6 +112,8 @@ class SessionManager:
         control_task: asyncio.Task | None = None
         segments = 0
         reason = EndReason.normal
+        error_detail: str | None = None  # terminal failure message surfaced to the client
+        session_source = "tab"  # set from SessionStarted; tags this session's fan-out events
         # Live, runtime-mutable config (control plane, spec v3 §8). Mutated IN PLACE by the control
         # subscriber so the persist/translate closures read the current value without nonlocal.
         live_targets: list[str] = list(self._translation_targets)
@@ -164,7 +167,9 @@ class SessionManager:
             try:
                 async for event in gen:
                     if not isinstance(event, FinalSegment):
-                        enqueue_fanout({"kind": "interim", "text": event.text})
+                        enqueue_fanout(
+                            {"kind": "interim", "text": event.text, "source": session_source}
+                        )
                         continue  # interim is live-only, not persisted
                     try:
                         async with self._session_factory() as db:
@@ -199,6 +204,7 @@ class SessionManager:
                             "text": event.text,
                             "language": event.language,
                             "speaker": MIXED,
+                            "source": session_source,
                             "start_ms": event.start_ms,
                             "end_ms": event.end_ms,
                         }
@@ -242,6 +248,7 @@ class SessionManager:
                                 "target": target,
                                 "text": out.get(target, ""),
                                 "status": "ok" if target in out else "failed",
+                                "source": session_source,
                             }
                         )
                 except Exception as exc:  # noqa: BLE001 — translation is best-effort
@@ -327,6 +334,7 @@ class SessionManager:
         try:
             async for event in adapter.events():
                 if isinstance(event, SessionStarted):
+                    session_source = event.source
                     async with self._session_factory() as db:
                         meeting = await repo.upsert_meeting(
                             db,
@@ -335,15 +343,24 @@ class SessionManager:
                         )
                         meeting_id = meeting.id
                         await db.commit()
-                    async with self._session_factory() as db:
-                        session = await repo.create_session(
-                            db,
-                            meeting_id=meeting_id,
-                            platform_call_id=event.call_id,
-                            run_id=self._worker_id,
-                        )
-                        session_id = session.id
-                        await db.commit()
+                    try:
+                        async with self._session_factory() as db:
+                            session = await repo.create_session(
+                                db,
+                                meeting_id=meeting_id,
+                                platform_call_id=event.call_id,
+                                run_id=self._worker_id,
+                                source=CaptureSource(event.source),
+                            )
+                            session_id = session.id
+                            await db.commit()
+                    except repo.SourceConflict as exc:
+                        # Another live session already owns this (meeting, source) — e.g. a flapping
+                        # mic minting a fresh call_id. End cleanly; the stale lease frees the slot.
+                        log.warning("session.source_conflict", error=str(exc))
+                        reason = EndReason.error
+                        error_detail = f"source_conflict: {exc}"
+                        break
                     persist_task = asyncio.create_task(
                         persist(self._transcriber_factory(None), meeting_id, session_id)
                     )
@@ -386,6 +403,7 @@ class SessionManager:
                         "session.transcribe_failed", session_id=str(session_id), error=repr(exc)
                     )
                     reason = EndReason.error
+                    error_detail = str(exc)  # surfaced to the client (e.g. Soniox quota/billing)
             # Drain translations after transcription completes (bounded).
             if translate_task is not None:
                 _put_sentinel(translation_q)
@@ -448,6 +466,7 @@ class SessionManager:
             session_id=str(session_id) if session_id else None,
             segments=segments,
             reason=str(reason),
+            error=error_detail,
         )
 
 
