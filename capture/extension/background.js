@@ -34,12 +34,13 @@ function setIconState(state) {
   } catch { /* action API unavailable */ }
 }
 
-// On (re)load, reflect reality: an offscreen doc exists iff some capture is alive. Clear a stale
-// flag if not; otherwise show the icon for whatever sources storage last reported.
+// On (re)load, reflect reality in the icon. Do NOT clear minutesCapture here: hasDocument() is racy
+// right after a worker wake and a false negative would wipe the LIVE sources mid-capture (the popup
+// then loses its chip). The offscreen owns that state and clears it on teardown; the popup gates the
+// recording view on hasDocument() anyway, so stale sources are never shown.
 (async () => {
   try {
     if (!(await chrome.offscreen.hasDocument?.())) {
-      await chrome.storage.local.set({ minutesCapture: { sources: {} } });
       setIconState("off");
     } else {
       const st = await chrome.storage.local.get("minutesCapture");
@@ -73,17 +74,19 @@ async function startTab(tabId, config) {
   } catch {}
   const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
   await ensureOffscreen();
-  await chrome.runtime.sendMessage({
+  // Fire-and-forget: the offscreen processes this but doesn't reply, so awaiting a response can
+  // reject ("message port closed") and falsely fail the start even though capture began.
+  chrome.runtime.sendMessage({
     target: "offscreen", type: "start", source: "tab", streamId, config,
-  });
+  }).catch(() => {});
 }
 
 async function addMic(config, deviceId, aec) {
   // Mic needs no tabCapture + must NOT close the doc (that would kill a live tab capture).
   await ensureOffscreen();
-  await chrome.runtime.sendMessage({
+  chrome.runtime.sendMessage({
     target: "offscreen", type: "add-source", source: "mic", deviceId, aec, config,
-  });
+  }).catch(() => {});
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {

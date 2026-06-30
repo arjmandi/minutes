@@ -274,7 +274,7 @@ function renderCapture(st) {
              ${micOn ? `<div class="mic-row__action"><button class="btn sm" id="micsetup" style="flex:1"><span class="src-mark src-mark--mic" style="margin-right:2px"></span>Grant microphone access</button></div>` : ""}`}
       </div>
       <button class="btn lg primary" id="start" style="margin-top:auto">● Start recording${micReady ? " · 2 sources" : ""}</button>
-      <div class="cap-note">${micReady ? "Online stream + Host mic, kept separate." : "Captures this tab's audio — you still hear everything."}</div>`;
+      <div class="cap-note">Captures this tab's audio — you still hear everything.</div>`;
     $("start").onclick = start;
     wireMicToggle(st);
     if ($("mictest")) $("mictest").onclick = openMicSetup;
