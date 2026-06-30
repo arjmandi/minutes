@@ -5,7 +5,8 @@ Microsoft Teams call — or a webinar, a recorded video, a podcast — and minut
 a written transcript as it plays, optionally translating every line into another language in real
 time, and streams it into a clean web app you can read, search, rename, share, and export. It can
 also capture **your own microphone** as a separate track, so your side of a call is transcribed too
-— no second bot account, no extra participant.
+— no second bot account, no extra participant. Or skip the browser extension entirely and **record
+your mic right in the app** — on desktop or your phone, as an installable PWA.
 
 Everything runs on infrastructure **you** operate. The only external processors are the
 speech-to-text and translation APIs; capture happens in *your* browser, not on a server-side browser
@@ -32,7 +33,10 @@ farm. Multi-user, EU-friendly, GDPR-minded.
 - **Public share links** — read-only, via an opaque token you can rotate or disable; two-column view
   when a meeting has both sources.
 - **Export** — `txt` / `md` / `json`; transcript, translation, or both; by source or combined.
-- **Mobile-ready web app** (capture itself runs on desktop Chrome).
+- **Record in the app** — capture your microphone right in the web app, on desktop **or your phone**,
+  with no extension. Installable as a **PWA** (add to home screen) for a full-screen, one-tap recorder.
+- **One-tap copy** — copy a transcript or a translation (no timestamps) for the source you're viewing.
+- **Mobile-ready web app** — read, translate, share, export, and record from a phone browser.
 - **Per-user keys + EU/US data residency** — each user brings their own Soniox + Anthropic keys and
   picks their Soniox region; nothing is centrally billed.
 - **GDPR controls** — optional consent gate, configurable retention purge, and a full erasure path.
@@ -138,6 +142,20 @@ The extension is unpacked (not yet on the Chrome Web Store):
 
 The toolbar icon shows what's live (off / Online stream / Host mic / both). Full feature tour:
 **[docs → Using the web app](https://gettheminutes.com/docs/users/web-app)**.
+
+## Record in the app
+
+No extension needed — **record your microphone straight from the web app**, on desktop or your phone:
+
+1. Open the app and click **Record** (beside Upload), or tap **Record** on mobile.
+2. Allow the microphone, confirm the level, optionally name it, and hit **Record**.
+3. Watch the live transcript — the screen stays awake while recording. **Stop** when done and it
+   becomes a normal meeting (view, export, share, translate).
+
+**Install it as an app.** On your deployed HTTPS site, add minutes to the home screen — iOS Safari:
+**Share → Add to Home Screen**; Android Chrome: the install prompt — and it runs full-screen like a
+native recorder. (`getUserMedia` needs a secure context, so this works on your `https://` domain, not
+plain `http`.)
 
 ## License
 
