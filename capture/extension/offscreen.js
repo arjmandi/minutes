@@ -1,37 +1,38 @@
-// Offscreen document: redeem the tab stream, run the audio pipeline, stream framed PCM to the
-// backend ingest WS. Wire format matches app/audio/frames.py: 13-byte LE header
+// Offscreen document: run one audio pipeline PER SOURCE (dual-source capture) and stream framed
+// PCM to the backend ingest WS. Wire format matches app/audio/frames.py: 13-byte LE header
 // (seq uint32, ts_ms uint64, flags uint8) + Int16 PCM (s16le). Auth via the
 // `minutes.auth.bearer` subprotocol so the token never lands in the URL.
+//
+// Each capture source ("tab" = the meeting/video tab; "mic" = the host's microphone) is an
+// independent Capture: its own getUserMedia stream, AudioWorklet chain, and WebSocket — so the two
+// never share a failure domain. They share ONE AudioContext. The tab is played back to the user
+// (passthrough); the mic is NOT (that would echo the tab into the mic). Per-source status is
+// published to chrome.storage.local.minutesCapture.sources for the popup + the toolbar icon.
 
 const AUTH_SUBPROTOCOL = "minutes.auth.bearer";
 
+const captures = new Map(); // source -> Capture
 let ctx = null;
-let ws = null;
-let node = null;
-let source = null;
-let stream = null;
-let seq = 0;
-let totalSamples = 0;
-let stopping = false;
-let frames = 0;
-let lastReportFrames = 0;
-let ended = false; // guards cleanup so teardown + the capture-ended signal fire exactly once
+let workletReady = null;
 
-chrome.runtime.onMessage.addListener((msg) => {
-  if (msg.target !== "offscreen") return;
-  if (msg.type === "start") start(msg.streamId, msg.config);
-  else if (msg.type === "stop") stop();
-});
+async function ensureCtx() {
+  if (!ctx) ctx = new AudioContext();
+  if (!workletReady) workletReady = ctx.audioWorklet.addModule("pcm-worklet.js");
+  await workletReady;
+  return ctx;
+}
 
-// Push status to the popup (if open) AND persist it, so a re-opened popup reflects reality.
-function setStatus(text, capturing) {
-  chrome.runtime.sendMessage({ target: "popup", type: "status", status: text }).catch(() => {});
+// Serialize the live captures' per-source status to storage (the popup + background read it).
+function publishStatus() {
+  const sources = {};
+  for (const [src, c] of captures) {
+    sources[src] = { capturing: c.live, frames: c.frames, db: c.lastDb, status: c.status };
+  }
   try {
-    chrome.storage.local.set({ minutesCapture: { capturing, status: text, at: Date.now() } });
+    chrome.storage.local.set({ minutesCapture: { sources, at: Date.now() } });
   } catch {}
 }
 
-// RMS level of a frame in dBFS: ~ -90 = silence, ~ -40..-15 = speech. Lets you SEE if audio flows.
 function rmsDb(int16) {
   let sum = 0;
   for (let i = 0; i < int16.length; i++) {
@@ -52,104 +53,151 @@ function encodeFrame(seqNo, tsMs, int16) {
   return buf;
 }
 
-async function start(streamId, config) {
-  seq = 0;
-  totalSamples = 0;
-  frames = 0;
-  lastReportFrames = 0;
-  stopping = false;
-  ended = false;
-  setStatus("starting…", true); // mark capture live up front (popup also holds a startup grace)
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      audio: { mandatory: { chromeMediaSource: "tab", chromeMediaSourceId: streamId } },
-    });
-  } catch (err) {
-    setStatus("capture_failed: " + err, false);
-    cleanup();
-    return;
+class Capture {
+  constructor(source) {
+    this.source = source; // "tab" | "mic"
+    this.ws = null;
+    this.node = null;
+    this.srcNode = null;
+    this.stream = null;
+    this.seq = 0;
+    this.total = 0;
+    this.frames = 0;
+    this.lastReport = 0;
+    this.lastDb = -99;
+    this.stopping = false;
+    this.ended = false;
+    this.live = true; // present-in-map + not torn down
+    this.status = "starting…";
   }
 
-  ctx = new AudioContext();
-  await ctx.audioWorklet.addModule("pcm-worklet.js");
-  source = ctx.createMediaStreamSource(stream);
-  node = new AudioWorkletNode(ctx, "pcm-downsampler");
-  source.connect(node);
-  source.connect(ctx.destination); // passthrough so the human still hears the meeting
-
-  ws = new WebSocket(config.backendUrl, [AUTH_SUBPROTOCOL, config.token]);
-  ws.binaryType = "arraybuffer";
-
-  ws.onopen = () => {
-    setStatus("connected — waiting for admission…", true);
-    ws.send(
-      JSON.stringify({
-        type: "hello",
-        platform: config.platform,
-        external_meeting_id: config.externalMeetingId,
-        call_id: config.callId,
-      })
-    );
-  };
-
-  ws.onmessage = (ev) => {
-    let data;
+  async start(spec) {
+    await ensureCtx();
     try {
-      data = JSON.parse(ev.data);
-    } catch {
+      if (this.source === "tab") {
+        this.stream = await navigator.mediaDevices.getUserMedia({
+          audio: { mandatory: { chromeMediaSource: "tab", chromeMediaSourceId: spec.streamId } },
+        });
+      } else {
+        // Mic. echoCancellation defaults OFF: with the tab playing on speakers, AEC's reference is
+        // the tab audio and can suppress the host's speech (headphone users can leave it off too).
+        const audio = { echoCancellation: !!spec.aec, noiseSuppression: true, autoGainControl: true };
+        if (spec.deviceId) audio.deviceId = { exact: spec.deviceId };
+        this.stream = await navigator.mediaDevices.getUserMedia({ audio });
+      }
+    } catch (err) {
+      this.status = "capture_failed: " + err;
+      this.teardown();
       return;
     }
-    if (data.type === "admitted") setStatus("capturing — 0 frames", true);
-    else if (data.type === "ended") {
-      setStatus("ended · " + data.segments + " segments", false);
-      cleanup();
-    } else if (["rejected", "conflict", "forbidden", "error"].includes(data.type)) {
-      setStatus("denied · " + (data.reason || data.type), false);
-      cleanup();
+
+    this.srcNode = ctx.createMediaStreamSource(this.stream);
+    this.node = new AudioWorkletNode(ctx, "pcm-downsampler");
+    this.srcNode.connect(this.node);
+    if (this.source === "tab") this.srcNode.connect(ctx.destination); // passthrough; mic must NOT
+
+    this.ws = new WebSocket(spec.config.backendUrl, [AUTH_SUBPROTOCOL, spec.config.token]);
+    this.ws.binaryType = "arraybuffer";
+    this.ws.onopen = () => {
+      this.status = "connected — waiting for admission…";
+      publishStatus();
+      this.ws.send(
+        JSON.stringify({
+          type: "hello",
+          platform: spec.config.platform,
+          external_meeting_id: spec.config.externalMeetingId,
+          call_id: spec.config.callId,
+          source: this.source,
+        })
+      );
+    };
+    this.ws.onmessage = (ev) => {
+      let data;
+      try {
+        data = JSON.parse(ev.data);
+      } catch {
+        return;
+      }
+      if (data.type === "admitted") {
+        this.status = "capturing — 0 frames";
+        publishStatus();
+      } else if (data.type === "ended") {
+        this.status = "ended · " + data.segments + " segments";
+        this.teardown();
+      } else if (["rejected", "conflict", "forbidden", "error"].includes(data.type)) {
+        // Surface the backend's actionable detail (e.g. Soniox quota/billing) to the popup.
+        this.status = "denied · " + (data.detail || data.reason || data.type);
+        this.live = false;
+        publishStatus();
+        this.teardown();
+      }
+    };
+    this.ws.onerror = () => {
+      this.status = "ws_error";
+      publishStatus();
+    };
+    this.ws.onclose = () => {
+      if (!this.stopping) this.status = "disconnected";
+      this.teardown();
+    };
+    this.node.port.onmessage = (e) => {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+      const int16 = e.data; // Int16Array, 1600 samples (100 ms @ 16 kHz)
+      const tsMs = this.total / 16; // 16 samples per ms at 16 kHz
+      this.total += int16.length;
+      this.ws.send(encodeFrame(this.seq++, tsMs, int16));
+      this.frames++;
+      if (this.frames - this.lastReport >= 10) {
+        this.lastReport = this.frames;
+        this.lastDb = rmsDb(int16);
+        this.status = "capturing · " + this.frames + " frames · " + this.lastDb + " dBFS";
+        publishStatus();
+      }
+    };
+  }
+
+  stop() {
+    this.stopping = true;
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: "end" })); // backend finalizes, replies "ended"
+    } else {
+      this.teardown();
     }
-  };
+  }
 
-  ws.onerror = () => setStatus("ws_error", false);
-  ws.onclose = () => {
-    if (!stopping) setStatus("disconnected", false);
-    cleanup();
-  };
-
-  node.port.onmessage = (e) => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    const int16 = e.data; // Int16Array, 1600 samples (100 ms @ 16 kHz)
-    const tsMs = totalSamples / 16; // 16 samples per ms at 16 kHz
-    totalSamples += int16.length;
-    ws.send(encodeFrame(seq++, tsMs, int16));
-    frames++;
-    if (frames - lastReportFrames >= 10) {
-      // ~once per second; the dBFS makes silent-tab vs real-audio obvious.
-      lastReportFrames = frames;
-      setStatus("capturing · " + frames + " frames · " + rmsDb(int16) + " dBFS", true);
+  teardown() {
+    if (this.ended) return; // exactly once
+    this.ended = true;
+    this.live = false;
+    try { if (this.node) this.node.disconnect(); } catch {}
+    try { if (this.srcNode) this.srcNode.disconnect(); } catch {}
+    try { if (this.stream) this.stream.getTracks().forEach((t) => t.stop()); } catch {}
+    try { if (this.ws) this.ws.close(); } catch {}
+    this.ws = this.node = this.srcNode = this.stream = null;
+    captures.delete(this.source);
+    publishStatus();
+    if (captures.size === 0) {
+      // All sources done: release the shared context and have the background close this doc.
+      try { if (ctx) { ctx.close(); ctx = null; workletReady = null; } } catch {}
+      chrome.runtime.sendMessage({ type: "capture-ended" }).catch(() => {});
     }
-  };
-}
-
-function stop() {
-  stopping = true;
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: "end" })); // backend finalizes, replies {"type":"ended"}
-  } else {
-    setStatus("stopped", false);
-    cleanup();
   }
 }
 
-function cleanup() {
-  if (ended) return; // fire teardown + the capture-ended signal exactly once
-  ended = true;
-  try { if (node) node.disconnect(); } catch {}
-  try { if (source) source.disconnect(); } catch {}
-  try { if (stream) stream.getTracks().forEach((t) => t.stop()); } catch {}
-  try { if (ctx) ctx.close(); } catch {}
-  try { if (ws) ws.close(); } catch {}
-  ctx = ws = node = source = stream = null;
-  // Capture is over -> have the background close this offscreen doc (hasDocument()=false, icon idle).
-  // The popup's authority is that doc's existence, so this is what flips the popup back to idle.
-  chrome.runtime.sendMessage({ type: "capture-ended" }).catch(() => {});
-}
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.target !== "offscreen") return;
+  if (msg.type === "start" || msg.type === "add-source") {
+    const source = msg.source || "tab";
+    if (captures.has(source)) return; // already capturing this source
+    const cap = new Capture(source);
+    captures.set(source, cap);
+    cap.start({ streamId: msg.streamId, deviceId: msg.deviceId, aec: msg.aec, config: msg.config });
+  } else if (msg.type === "stop" || msg.type === "remove-source") {
+    if (msg.source) {
+      const c = captures.get(msg.source);
+      if (c) c.stop();
+    } else {
+      for (const c of [...captures.values()]) c.stop(); // stop everything
+    }
+  }
+});

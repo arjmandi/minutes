@@ -164,7 +164,8 @@ function renderCapture(st) {
     </div>`;
 
   if (capturing) {
-    const frames = (st.minutesCapture?.status || "").match(/(\d[\d,]*)\s*frames/);
+    const _s = st.minutesCapture?.sources || {};
+    const frames = ((_s.tab || _s.mic || {}).status || "").match(/(\d[\d,]*)\s*frames/);
     view.innerHTML = `
       ${ctx}
       <div class="rec">
@@ -266,7 +267,8 @@ async function reconcile() {
   if (active !== lastCapturing) { lastCapturing = active; init(); return; }
   if (active) {
     const fr = view.querySelector(".rec__frames");
-    const m = (st.minutesCapture?.status || "").match(/(\d[\d,]*)\s*frames/);
+    const _s = st.minutesCapture?.sources || {};
+    const m = ((_s.tab || _s.mic || {}).status || "").match(/(\d[\d,]*)\s*frames/);
     if (fr) fr.textContent = m ? "frames " + m[1] : "live";
   }
 }
