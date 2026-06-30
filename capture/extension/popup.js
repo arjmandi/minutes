@@ -62,7 +62,10 @@ async function init() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   activeTabId = tab?.id ?? null;
   meeting = extractMeeting(tab);
-  const st = await chrome.storage.local.get(["backendBase", "deviceToken", "deviceEmail", "minutesCapture"]);
+  const st = await chrome.storage.local.get([
+    "backendBase", "deviceToken", "deviceEmail", "minutesCapture",
+    "micEnabled", "micGranted", "micDeviceId", "micAec",
+  ]);
   if (!st.backendBase) return renderNoServer();
   if (!st.deviceToken) return renderLogin(st);
   st.__active = await isRecording();
@@ -165,29 +168,56 @@ function renderCapture(st) {
 
   if (capturing) {
     const _s = st.minutesCapture?.sources || {};
-    const frames = ((_s.tab || _s.mic || {}).status || "").match(/(\d[\d,]*)\s*frames/);
+    const fr = (src) => {
+      const m = (_s[src]?.status || "").match(/(\d[\d,]*)\s*frames/);
+      return m ? "· " + esc(m[1]) + " frames" : "";
+    };
+    const micLive = !!_s.mic;
     view.innerHTML = `
       ${ctx}
-      <div class="rec">
-        <div class="rec__label"><span class="dot"></span>RECORDING</div>
-        <div class="rec__frames">${frames ? "frames " + esc(frames[1]) : "live"}</div>
+      <div class="rec"><div class="rec__label"><span class="dot"></span>RECORDING</div></div>
+      <div class="srcchips">
+        <div class="srcchip on"><span class="d tab"></span>Online stream ${fr("tab")}</div>
+        ${st.micEnabled ? `<div class="srcchip ${micLive ? "on" : "pending"}"><span class="d mic"></span>Host mic ${micLive ? fr("mic") : "· starting…"}</div>` : ""}
       </div>
       <div class="meterwrap"><div class="meter on"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
       <button class="btn lg stop" id="stop">■ Stop</button>
       <div class="cap-note">Streaming to ${esc(hostOf((st.backendBase) || ""))}</div>`;
     $("stop").onclick = stop;
   } else {
+    const micOn = !!st.micEnabled;
+    const micReady = micOn && st.micGranted;
     view.innerHTML = `
       ${ctx}
       <div class="meterwrap"><div class="meter idle"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
+      <label class="microw"><input type="checkbox" id="micchk" ${micOn ? "checked" : ""} /><span>Also capture my microphone (Host mic)</span></label>
+      ${micOn
+        ? (micReady
+            ? `<div class="micnote">🎙 Mic ready — <a id="mictest">test / change</a></div>`
+            : `<button class="btn sm" id="micsetup">Grant microphone access…</button>`)
+        : ""}
       <button class="btn lg primary" id="start">● Start recording</button>
-      <div class="cap-note">Captures this tab's audio — you still hear everything.</div>`;
+      <div class="cap-note">Captures this tab's audio${micReady ? " + your mic" : ""} — you still hear everything.</div>`;
     $("start").onclick = start;
+    const chk = $("micchk");
+    if (chk) chk.onchange = async () => {
+      await chrome.storage.local.set({ micEnabled: chk.checked });
+      if (chk.checked && !st.micGranted) openMicSetup();
+      else init();
+    };
+    if ($("mictest")) $("mictest").onclick = openMicSetup;
+    if ($("micsetup")) $("micsetup").onclick = openMicSetup;
   }
 }
 
+function openMicSetup() {
+  chrome.tabs.create({ url: chrome.runtime.getURL("permission.html") });
+}
+
 async function start() {
-  const st = await chrome.storage.local.get(["backendBase", "deviceToken"]);
+  const st = await chrome.storage.local.get([
+    "backendBase", "deviceToken", "micEnabled", "micGranted", "micDeviceId", "micAec",
+  ]);
   const note = view.querySelector(".cap-note");
   if (note) note.textContent = "Authorizing…";
   // The new Teams web app exposes no meeting id in the URL — mint a per-capture id so the meeting
@@ -223,6 +253,22 @@ async function start() {
       },
     });
     if (!res?.ok) throw new Error(res?.error || "capture failed to start");
+    // If the mic is enabled + permitted, add it as a SECOND source — same capability token (it's
+    // scoped to this meeting), a DISTINCT call_id, source=mic. Failure here never affects the tab.
+    if (st.micEnabled && st.micGranted) {
+      await chrome.runtime.sendMessage({
+        type: "add-mic",
+        deviceId: st.micDeviceId || null,
+        aec: !!st.micAec,
+        config: {
+          backendUrl: wsIngest(st.backendBase),
+          token,
+          platform: meeting.platform,
+          externalMeetingId,
+          callId: crypto.randomUUID(),
+        },
+      }).catch(() => {});
+    }
     // Hold the recording UI through the startup window: the offscreen doc takes a beat to exist,
     // so the authoritative hasDocument() reads false for ~1s. The grace bridges that; afterwards
     // hasDocument() rules (and reverts to idle only if the capture genuinely failed).

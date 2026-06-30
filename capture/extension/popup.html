@@ -59,6 +59,19 @@
   .empty__sub { font-size: 13px; color: var(--ink2); line-height: 1.5; max-width: 240px; }
   .signin-target { font-size: 13px; color: var(--ink2); }
   .signin-target b { color: var(--ink); font-family: "Geist Mono", ui-monospace, monospace; font-weight: 500; }
+  /* mic toggle + per-source chips (dual-source) */
+  button.btn.sm { width: auto; padding: 7px 12px; font-size: 12px; background: var(--surface); border: 1px solid var(--border); color: var(--ink); }
+  .microw { display: flex; align-items: center; gap: 8px; font-weight: 500; font-size: 12px; cursor: pointer; margin: 0; }
+  .microw input { width: auto; margin: 0; }
+  .micnote { font-size: 11px; color: var(--ink2); }
+  .micnote a { color: var(--accent); cursor: pointer; font-weight: 600; }
+  .srcchips { display: flex; flex-direction: column; gap: 6px; }
+  .srcchip { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--ink2); }
+  .srcchip .d { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .srcchip .d.tab { background: var(--accent); }
+  .srcchip .d.mic { background: #2563eb; }
+  .srcchip.on { color: var(--ink); }
+  .srcchip.pending { opacity: .6; }
 </style>
 </head>
 <body>
