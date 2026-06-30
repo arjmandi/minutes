@@ -26,7 +26,9 @@
 
 	# Product app + API + capture/live WebSockets + SPA assets + public share viewer -> backend.
 	# (/docs is the documentation site below, not FastAPI's Swagger.)
-	@app path /app /app/* /api/* /assets/* /shared /shared/* /ingest /healthz /readyz
+	# /sw.js + /manifest.webmanifest are the PWA service worker + manifest: they must be served at
+	# ROOT scope by the backend (the SW's scope is /), so they're routed here, not to the landing.
+	@app path /app /app/* /api/* /assets/* /shared /shared/* /ingest /healthz /readyz /sw.js /manifest.webmanifest
 	handle @app {
 		reverse_proxy backend:8000
 	}
