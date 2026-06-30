@@ -1,8 +1,9 @@
 """SonioxTranscriber protocol tests against a scripted fake WS server (offline, no key).
 
 Exercises the wire-protocol parsing the FakeTranscriber can't: interim hypotheses, is_final +
-<end> segmentation, per-token language/timing, the finished terminal frame, and the recoverable
-503 error path.
+<end> segmentation, per-token language/timing, the finished terminal frame, and the
+recoverable-error reconnect path (a transient 503 reconnects and continues). Deterministic
+reconnect/recycle edge cases live in test_soniox_reconnect.py.
 """
 
 from __future__ import annotations
@@ -10,11 +11,10 @@ from __future__ import annotations
 import asyncio
 import json
 
-import pytest
 import websockets
 
 from app.transcribe.base import FinalSegment, Interim
-from app.transcribe.soniox import SonioxError, SonioxTranscriber
+from app.transcribe.soniox import SonioxTranscriber
 
 
 async def _fake_server(scripts: list[dict]):
@@ -95,16 +95,44 @@ async def test_multiple_segments_get_distinct_ids():
     assert [s.language for s in finals] == ["en", "de"]
 
 
-async def test_503_is_recoverable():
-    scripts = [
-        {"tokens": [], "error_code": 503, "error_type": "service_unavailable",
-         "error_message": "max connection duration"}
-    ]
-    server, port = await _fake_server(scripts)
+async def test_recoverable_error_reconnects(monkeypatch):
+    # A transient 503 on the first connection must NOT fail the stream: the client reconnects and
+    # continues. A connection-counting handler 503s once, then serves a real segment.
+    monkeypatch.setattr("app.transcribe.soniox._BACKOFF_BASE_S", 0.0)
+    attempts = {"n": 0}
+
+    async def handler(ws):
+        await ws.recv()  # config
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            await ws.send(json.dumps({"tokens": [], "error_code": 503,
+                                      "error_type": "service_unavailable", "error_message": "cap"}))
+            return  # close -> client should reconnect
+        await ws.send(json.dumps({"tokens": [
+            {"text": "after retry", "is_final": True, "language": "en",
+             "start_ms": 0, "end_ms": 300},
+            {"text": "<end>", "is_final": True}]}))
+        await ws.send(json.dumps({"tokens": [], "finished": True}))
+
+    server = await websockets.serve(handler, "localhost", 0)
+    port = server.sockets[0].getsockname()[1]
+
+    async def audio():  # stays open across the reconnect so audio_done isn't set first
+        for _ in range(200):
+            yield b"\x00\x00" * 160
+            await asyncio.sleep(0.005)
+
     try:
-        with pytest.raises(SonioxError) as excinfo:
-            await asyncio.wait_for(_collect(f"ws://localhost:{port}"), timeout=10)
-        assert excinfo.value.recoverable is True
+        t = SonioxTranscriber(api_key="t", language_hints=["en"], url=f"ws://localhost:{port}")
+        events = []
+        async def run():
+            async for ev in t.stream(audio()):
+                events.append(ev)
+        await asyncio.wait_for(run(), timeout=10)
     finally:
         server.close()
         await server.wait_closed()
+
+    assert attempts["n"] == 2  # it reconnected
+    finals = [e for e in events if isinstance(e, FinalSegment)]
+    assert len(finals) == 1 and finals[0].text == "after retry"
