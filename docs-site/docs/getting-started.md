@@ -9,7 +9,7 @@ title: "Getting started"
 
 There are three pieces:
 
-- A **web app** — the product UI where transcripts appear live, get translated, exported, and shared.
+- A **web app** — the product UI where transcripts appear live, get translated, copied, exported, and shared. It can also **record your own microphone** directly (no extension) and **install to your phone's home screen** as a full-screen app.
 - A **Chrome capture extension** — streams the audio of your Meet/Teams browser tab to the backend.
 - A **FastAPI backend** — the single-box Docker stack (Caddy TLS edge, backend, Postgres, Valkey/Redis, MinIO object store, and a scheduler) that runs the pipeline and stores everything.
 
@@ -19,7 +19,7 @@ The pipeline in one line: the extension captures tab audio → [Soniox](https://
 This page splits into two short tracks. Pick the one that matches you — you do not need to read both.
 
 - **Administrators** stand up the server and create accounts. → [Track A](#track-a-administrators)
-- **Users** sign in, set their keys, install the extension, and capture meetings. → [Track B](#track-b-users)
+- **Users** sign in, set their keys, and capture meetings — with the extension or by recording in the app. → [Track B](#track-b-users)
 :::
 
 ## Who needs what
@@ -32,7 +32,8 @@ A quick map of who touches which part:
   • A domain + an EU VPS                      • An account (the admin makes it)
   • Docker + the minutes repo                 • Their OWN Soniox key + region (live + uploads)
   • Creates user accounts via CLI             • Their OWN Anthropic key (for translation)
-  • (optional) a fallback Soniox key          • The Chrome capture extension + a tab to capture
+  • (optional) a fallback Soniox key          • A way to capture: the extension (a tab),
+                                                in-app recording (their mic), or an upload
         │                                              │
         └──────────────►  one minutes server  ◄────────┘
                           (web app + backend)
@@ -110,24 +111,30 @@ In the web app's **Settings**, add your own API keys. These unlock the features 
 Transcription uses **your** Soniox key. If your admin set a shared fallback key, live capture still works before you add your own — but uploads always need yours, and your own key lets you choose your data region.
 :::
 
-### 3. Install the capture extension
+### 3. Capture something
 
-Load the Chrome capture extension, open its settings (the gear icon in the popup), and enter your **Server URL**. The same settings page is also where you set up the optional **Host mic** (capture your own voice as a second track). The popup signs you in with your email and password, and from then on mints a short-lived token for each tab it captures. The toolbar icon shows whether it's idle or recording — and which sources are live.
+There are **two ways to capture live audio** (plus uploads). They produce the same kind of meeting — pick whichever fits.
+
+#### Option A — Record your own voice, right in the app (the quickest start)
+
+No extension, no second device. In the web app, click **Record** (in the Transcriptions list header on a computer, or the prominent **Record** action on a phone), grant the microphone, run a quick level test, then press **Record**. A live view shows the timer, level meter, **Stop**, and the transcript as you speak. Press **Stop** and it becomes a normal meeting. This is a **mic-only** capture — your own voice (the **Host mic**) — so it's perfect for dictation, a voice note, or an in-person talk.
+
+It works on a computer **or a phone** over your HTTPS site, and you can [install minutes to your home screen](/users/recording#install-minutes-on-your-phone-pwa) so it runs full-screen like a native app.
+
+→ **[Record in the app](/users/recording)**
+
+#### Option B — Capture a browser tab with the extension (for calls and videos)
+
+To transcribe a **Meet/Teams call, a webinar, or a video** — i.e. a browser **tab's** audio — use the Chrome extension:
+
+1. Load the Chrome capture extension, open its settings (the gear icon in the popup), and enter your **Server URL**. The popup signs you in with your email and password, then mints a short-lived token for each tab it captures.
+2. Join your Google Meet or Microsoft Teams meeting as you normally would, in Chrome, with your own account. (minutes captures that tab's audio — you have to actually be in the call.)
+3. Open the extension popup on the meeting tab and start capture.
+4. *(Optional)* Toggle **Also capture my microphone** to add your own voice as a second, separate track (**Host mic**) — in Meet/Teams your own voice isn't played back into the tab, so this is how you get *your* side transcribed. No second bot account joins the call.
 
 → **[Install the extension](/users/extension)**
 
-### 4. Capture a meeting
-
-1. Join your Google Meet or Microsoft Teams meeting as you normally would, in Chrome, with your own Google/Microsoft account. (minutes captures that tab's audio — you have to actually be in the call.)
-2. Open the extension popup on the meeting tab and start capture.
-3. *(Optional)* Toggle **Also capture my microphone** to add your own voice as a second, separate track (**Host mic**). In Meet/Teams your own voice isn't played back into the tab, so this is how you get *your* side transcribed — no second bot account joins the call. It's off by default and needs a one-time mic-permission grant.
-4. Watch the live transcript — and, if you set an Anthropic key, the translation — appear in the web app.
-
-From there you can translate individual lines on demand, rename the meeting, export it (`txt` / `md` / `json`, transcript / translation / both, with or without timestamps), and create read-only public share links.
-
-:::tip No call? Record just your microphone
-On a blank tab (or any page with no audio), turn on the mic and the popup offers **mic-only** capture — the button reads **Start recording (mic only)**. Handy for dictation, voice notes, or an in-person talk. See [the extension guide](/users/extension#capture-your-own-voice-host-mic) for the full Host-mic setup.
-:::
+Either way, watch the live transcript — and, if you set an Anthropic key, the translation — appear in the web app. From there you can translate individual lines on demand, rename the meeting, **copy** the text (no timestamps), export it (`txt` / `md` / `json`, transcript / translation / both, with or without timestamps), and create read-only public share links.
 
 → **[Using the web app](/users/web-app)** for the full feature tour.
 

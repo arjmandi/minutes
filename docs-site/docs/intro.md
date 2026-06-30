@@ -6,11 +6,12 @@ slug: /
 
 # What is minutes?
 
-**minutes** is a self-hosted tool for **live transcription and translation of any browser tab's
-audio**. Join a Google Meet or Microsoft Teams call — or just open a webinar, a recorded video, or a
-podcast — and minutes turns the audio into a written transcript as it plays, and (if you want)
-translates each line into another language in real time. The whole transcript streams into a clean
-web app you can read, search, rename, share, and export.
+**minutes** is a self-hosted tool for **live transcription and translation**. Join a Google Meet or
+Microsoft Teams call — or just open a webinar, a recorded video, or a podcast — and minutes turns the
+audio into a written transcript as it plays, and (if you want) translates each line into another
+language in real time. You can also **record your own microphone right in the app** (on a computer or
+a phone, no extension) or **upload a recording you already have**. The whole transcript streams into a
+clean web app you can read, search, rename, copy, share, and export.
 
 It's built for teams who want this capability **on infrastructure they run**, not handed to a
 third-party meeting-bot service. minutes is multi-user, EU-friendly, and designed with privacy in
@@ -27,7 +28,9 @@ users** who join meetings and read the live transcripts. The docs are split the 
 minutes is made of three pieces that work together:
 
 1. **The web app** — the product UI. This is where you see live transcripts, turn translation on,
-   rename meetings, export, and create share links. It runs at `/` (and also `/app`) on your server.
+   rename meetings, copy, export, and create share links. It can also **record your own microphone**
+   directly (no extension), and it **installs to your phone's home screen** as a full-screen app. It
+   runs at `/` (and also `/app`) on your server.
 2. **The Chrome capture extension** — a small browser extension (loaded from `capture/extension`)
    that captures the audio of **any browser tab** and streams it to your backend. Meet and Teams are
    auto-detected (and named with the real meeting ID); any other tab playing audio works too. You
@@ -38,14 +41,28 @@ minutes is made of three pieces that work together:
    fan-out and admission control), a **MinIO** object store (archived audio), and a **scheduler** for
    background work like upload transcription and retention purges.
 
+## Three ways to capture
+
+However you capture, you get the **same kind of meeting** — the same live transcript, translation,
+copy, export, and sharing:
+
+1. **A browser tab's audio** — the [Chrome extension](/users/extension) streams the audio of any tab
+   (a Meet/Teams call, a webinar, a video) from your desktop browser. It can also add **your own
+   microphone** as a separate track at the same time.
+2. **Your microphone, in the app** — [record directly in the web app](/users/recording), on a
+   computer or a phone, with **no extension and no second device**. It's a mic-only capture (the
+   **Host mic** source).
+3. **An audio file** — [upload a recording](/users/uploads) you already have and minutes transcribes
+   it in the background.
+
 ## How it works: the pipeline
 
 The path from a spoken sentence to a translated line on your screen is short and only ever touches
 two outside services:
 
 ```text
-Any browser tab audio  (Meet, Teams, a webinar, a video…)
-        │  (Chrome capture extension streams the tab's audio)
+Audio in  (a browser tab, your microphone, or an uploaded file)
+        │  (the extension, in-app recording, or an upload streams it in)
         ▼
    minutes backend  ──►  Soniox  (speech-to-text: en / de / fa)
         │                         returns the transcribed text
@@ -56,8 +73,8 @@ Any browser tab audio  (Meet, Teams, a webinar, a video…)
    Live transcript in the web app  (searchable, exportable, shareable)
 ```
 
-1. **Capture** — the extension streams the meeting tab's audio to the backend over a secure
-   WebSocket.
+1. **Capture** — audio reaches the backend over a secure WebSocket, whether from the extension (a
+   tab), in-app recording (your mic), or an upload.
 2. **Speech-to-text** — the backend sends audio to **Soniox**, which returns the words.
 3. **Translate** — each finalized line is optionally sent to **Anthropic (Claude)** and translated
    into the meeting's chosen output language.
@@ -86,20 +103,27 @@ Speech is transcribed in these languages, and translation can target one output 
 ## What you can do with it
 
 - **Live transcription** of any tab you capture — a Meet/Teams call, a webinar, a video — as it happens.
-- **Dual-source capture** — record the tab's audio (**Online stream**) and your own microphone
-  (**Host mic**) at once, kept fully separate (their own transcripts and timestamps). In Meet/Teams
-  your own voice isn't played into the tab, so the Host mic adds your side — no second bot account.
-  On a tab with no audio you can capture **mic-only** for dictation or an in-person talk.
+- **In-app recording** — [record your own microphone right in the web app](/users/recording), on a
+  computer or a phone, with **no extension and no second device**. It's a mic-only **Host mic**
+  capture that streams to the same pipeline and becomes a normal meeting. Great for dictation, a voice
+  note, or an in-person talk.
+- **Dual-source capture** — with the extension, record the tab's audio (**Online stream**) and your
+  own microphone (**Host mic**) at once, kept fully separate (their own transcripts and timestamps).
+  In Meet/Teams your own voice isn't played into the tab, so the Host mic adds your side — no second
+  bot account.
 - **Translation** — one output language per meeting, with an optional custom prompt and model, plus
   on-demand "translate this line" for a single line.
 - **Manage meetings** — rename them and read absolute timestamps for every line.
+- **Copy** the whole transcript (or translation) for the source you're viewing, as plain text with no
+  timestamps — a one-click clipboard grab for pasting elsewhere.
 - **Export** transcripts as `txt`, `md`, or `json`; choose transcript, translation, or both, with or
   without timestamps.
 - **Audio upload** — transcribe an existing recording (audio or video container) instead of a live
   call. Processed in the background by the scheduler.
 - **Public share links** — share a read-only view via an opaque token you can rotate or disable.
-- **Mobile-ready** — the web app is responsive, so you can read, translate, share, and export from a
-  phone browser (the capture extension itself runs on desktop Chrome).
+- **Install on your phone** — the web app is an installable **PWA** that runs full-screen from your
+  home screen, and it's fully responsive, so you can **record**, read, translate, copy, share, and
+  export from a phone. (The capture extension itself runs on desktop Chrome.)
 - **GDPR controls** — an optional consent gate, a configurable retention purge, and an erasure path
   for owners and admins.
 
@@ -123,5 +147,6 @@ Pick the path that fits you:
 
 - **Admins / operators** → head to [Deploy](/admin/deploy) to stand up the single-box stack and
   create your first users.
-- **End users** → head to [Getting started](/getting-started) to set up your keys, install the
-  capture extension, and start your first live transcript.
+- **End users** → head to [Getting started](/getting-started) to set up your keys and start your
+  first live transcript — capture a tab with the [extension](/users/extension), or just
+  [record your microphone in the app](/users/recording).

@@ -13,7 +13,7 @@ Before you start, gather a few things:
 
 - **A minutes account.** There's no public signup — your administrator creates your account for you and gives you an email and a temporary password.
 - **Your server's URL.** This is the web address your team runs minutes on, something like `https://minutes.your-org.com`. Your admin will tell you this too.
-- **The meeting (or tab) you want to capture.** minutes doesn't dial into calls — you join the Google Meet or Microsoft Teams meeting yourself (or just open any tab that plays audio — a webinar, a video, a podcast), and the [browser extension](/users/extension) captures that tab's audio.
+- **Something to capture.** minutes doesn't dial into calls. You can capture in three ways: join a Google Meet/Microsoft Teams call (or open any tab that plays audio — a webinar, a video, a podcast) and let the [browser extension](/users/extension) capture that tab's audio; **[record your own microphone right in the app](/users/recording)** (on a computer or a phone, no extension); or [upload a file you already have](/users/uploads).
 - **Your own API keys:**
   - A **Soniox** key — get one at [soniox.com](https://soniox.com). Powers **transcription** — both live capture and [uploaded files](/users/uploads).
   - An **Anthropic** key — get one at [console.anthropic.com](https://console.anthropic.com). Needed for **translation**.
@@ -112,6 +112,23 @@ The two sources stay separate — you read one at a time. A combined, side-by-si
 Switching sources only changes what you're looking at — both sources keep recording and translating in the background. Switch back and the other source's lines are right where you left them.
 :::
 
+## Copy the transcript or translation
+
+Need to drop a transcript into an email, a chat, or your notes? **Copy** grabs the whole thing as plain text — no download, no timestamps, just the words ready to paste.
+
+- **On a computer**, a small **copy icon** sits in the **Transcript** column header and another in the **Translation** column header.
+- **On a phone**, the copy icon is in the meeting header; it copies whichever of **Transcript** / **Translation** you're currently viewing (the toggle at the top).
+
+What gets copied is the **source you're viewing** — copy handles each source **separately**. If a meeting has both [audio sources](#two-audio-sources-in-one-meeting), the copy reflects whichever one the source switcher is set to; switch to the other and copy again to grab it. Transcript and translation are likewise copied **separately** — the Transcript copy gives you the original lines, the Translation copy gives you the translated lines.
+
+:::note Copy = quick plain text; Export = files with options
+**Copy** is the fast grab: the visible source's lines, **no timestamps**, straight to your clipboard. When you want a **file** — `txt` / `md` / `json`, with the choice of transcript / translation / both, timestamps on or off, and (for a two-source meeting) which source — use [**Export**](/users/meetings-and-export#export) instead.
+:::
+
+:::tip
+A copy only has translated text for lines that were actually translated. Untranslated lines are skipped on the translation side, so [translate the lines you want](/users/meetings-and-export#translate-this-line-on-demand) before copying the translation.
+:::
+
 ## On your phone
 
 minutes works in a mobile browser too. On a small screen the three columns collapse into one view at a time:
@@ -121,10 +138,11 @@ minutes works in a mobile browser too. On a small screen the three columns colla
 - When a meeting has **both** audio sources, a row of **source chips** (**Online stream** / **Host mic**, each with its colored mark) sits just above that Transcript / Translation toggle — tap a chip to switch which source you're reading, the same as the desktop switcher. Single-source meetings show no chips.
 - The account menu, a meeting's actions (rename, export, share, delete), and the per-meeting translation settings each slide up as a **bottom sheet**.
 
-The [capture extension](/users/extension) is desktop-Chrome only, so you start recordings from a computer — but you can read, translate, share, and export from your phone.
+You can also **[record your own microphone right on your phone](/users/recording)** — tap **Record** on the Transcriptions screen for a full-screen capture flow. (The [capture extension](/users/extension), which grabs a browser **tab's** audio, is desktop-Chrome only.) And of course you can read, translate, copy, share, and export from your phone. For the smoothest experience, [install minutes to your home screen](/users/recording#install-minutes-on-your-phone-pwa) so it runs full-screen like a native app.
 
 ## Where to next
 
 - [Set up the browser extension](/users/extension) — install it, point it at your server, and start capturing meetings.
-- [Meetings & export](/users/meetings-and-export) — rename meetings, translate lines, share, and export transcripts.
+- [Record in the app](/users/recording) — capture your own microphone right in the web app (computer or phone), and install minutes to your home screen.
+- [Meetings & export](/users/meetings-and-export) — rename meetings, translate lines, copy, share, and export transcripts.
 - [Uploads](/users/uploads) — transcribe an existing audio or video file (this is where your Soniox key comes in).

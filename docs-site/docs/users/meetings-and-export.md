@@ -1,11 +1,11 @@
 ---
-sidebar_position: 3
+sidebar_position: 4
 title: "Meetings, translation & export"
 ---
 
 # Meetings, translation & export
 
-Once a meeting is being captured, everything happens in the minutes web app. This page walks through reading a live meeting, turning on translation, fixing or filling in individual lines, renaming a meeting, and downloading a transcript to keep.
+Once a meeting is being captured, everything happens in the minutes web app. This page walks through reading a live meeting, turning on translation, fixing or filling in individual lines, renaming a meeting, copying a transcript to your clipboard, and downloading one to keep.
 
 ## The three-column view
 
@@ -88,9 +88,18 @@ Meetings start out named after their underlying call identifier, which isn't ver
 
 The new name shows up everywhere — the meetings list, the export filename, and any [public share link](/users/sharing). Only you (the owner) or an admin can rename a meeting.
 
+## Copy vs. export
+
+Two ways to get a transcript out of minutes, for two different needs:
+
+- **Copy** — a one-click **plain-text grab**, straight to your clipboard, with **no timestamps**. It copies the source you're currently viewing (transcript or translation, and — in a [two-source meeting](/users/web-app#two-audio-sources-in-one-meeting) — whichever source the switcher is on). Perfect for pasting into an email, a chat, or your notes. The copy icons live in the **Transcript** and **Translation** column headers (on a phone, in the meeting header). See [Copy the transcript or translation](/users/web-app#copy-the-transcript-or-translation).
+- **Export** — a **downloadable file** with options: pick the format (`txt` / `md` / `json`), what to include (transcript / translation / both), timestamps on or off, and (for a two-source meeting) which source. Use it when you want a file to keep, archive, or hand off.
+
+The rest of this section covers **export**.
+
 ## Export
 
-Click **Export** at the top of a meeting to download it as a file you can keep, archive, or hand to someone. minutes can produce three formats, and you can choose what goes in each file.
+Click **Export** at the top of a meeting to download it as a file you can keep, archive, or hand to someone. minutes can produce three formats, and you can choose what goes in each file. (For a quick clipboard grab without timestamps, [Copy](#copy-vs-export) is faster.)
 
 ### Formats: txt, md, json
 
