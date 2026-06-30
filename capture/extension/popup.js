@@ -49,6 +49,8 @@ function extractMeeting(tab) {
 let activeTabId = null;
 let meeting = { platform: "", externalMeetingId: "", name: "", sub: "", iconUrl: "" };
 let lastCapturing = null; // last rendered capture state (so the live listener only re-renders on transitions)
+let capTab = false; // which sources THIS start requested (for the recording chips during startup grace)
+let capMic = false;
 
 function showFoot(email) {
   foot.hidden = false;
@@ -149,14 +151,37 @@ function renderCapture(st) {
   const capturing = !!st.__active;
   lastCapturing = capturing;
 
-  if (!meeting.platform) {
+  if (!meeting.platform && !capturing) {
+    // This tab has no capturable audio (a new/blank tab, chrome:// page, etc). If the mic is ready we
+    // can still capture it on its own ("Host mic" only) — e.g. dictation or an in-person talk.
+    const micOn = !!st.micEnabled;
+    const micReady = micOn && st.micGranted;
     view.innerHTML = `
       <div class="empty">
-        <div style="display:flex;gap:8px;opacity:.5"><img src="brand/icon-meet.svg" width="30" height="30"/><img src="brand/icon-teams.svg" width="30" height="30"/></div>
-        <div class="empty__title">Nothing to capture here</div>
-        <div class="empty__sub">Open a Google Meet or Teams call — or any tab playing audio (a video, podcast, webinar…).</div>
+        ${micReady
+          ? `<div style="font-size:30px;line-height:1">🎙</div>`
+          : `<div style="display:flex;gap:8px;opacity:.5"><img src="brand/icon-meet.svg" width="30" height="30"/><img src="brand/icon-teams.svg" width="30" height="30"/></div>`}
+        <div class="empty__title">${micReady ? "Capture your microphone" : "Nothing to capture here"}</div>
+        <div class="empty__sub">${micReady
+          ? "No capturable audio on this tab — minutes will record just your microphone (Host mic)."
+          : "Open a Meet/Teams call or any tab playing audio — or turn on your mic to record just your voice."}</div>
       </div>
-      <button class="btn lg" id="start" disabled style="background:var(--surface2);color:var(--muted)">● Start recording</button>`;
+      <label class="microw"><input type="checkbox" id="micchk" ${micOn ? "checked" : ""} /><span>Capture my microphone (Host mic)</span></label>
+      ${micOn && !st.micGranted ? `<button class="btn sm" id="micsetup">Grant microphone access…</button>` : ""}
+      ${micReady
+        ? `<div class="micnote">🎙 Mic ready — <a id="mictest">test / change</a></div>
+           <button class="btn lg primary" id="start">● Start recording (mic only)</button>
+           <div class="cap-note">Records your microphone only — nothing from this tab.</div>`
+        : `<button class="btn lg" id="start" disabled style="background:var(--surface2);color:var(--muted)">● Start recording</button>`}`;
+    const chk = $("micchk");
+    if (chk) chk.onchange = async () => {
+      await chrome.storage.local.set({ micEnabled: chk.checked });
+      if (chk.checked && !st.micGranted) openMicSetup();
+      else init();
+    };
+    if ($("micsetup")) $("micsetup").onclick = openMicSetup;
+    if ($("mictest")) $("mictest").onclick = openMicSetup;
+    if (micReady && $("start")) $("start").onclick = () => start({ micOnly: true });
     return;
   }
 
@@ -172,13 +197,21 @@ function renderCapture(st) {
       const m = (_s[src]?.status || "").match(/(\d[\d,]*)\s*frames/);
       return m ? "· " + esc(m[1]) + " frames" : "";
     };
-    const micLive = !!_s.mic;
+    // Which sources this capture has. The offscreen publishes the live truth to _s; capTab/capMic
+    // cover the brief startup grace (and a popup reopened mid-capture relies on _s alone).
+    const tabLive = !!_s.tab, micLive = !!_s.mic;
+    const showTab = tabLive || capTab;
+    const showMic = micLive || capMic;
+    // Mic-only captures (a blank/non-capturable tab) get a mic context instead of the meeting card.
+    const recCtx = (showTab || (!showMic && meeting.platform))
+      ? `<div class="ctx"><img src="${esc(meeting.iconUrl || "brand/icon-web.svg")}" alt="" width="30" height="30" /><div style="min-width:0"><div class="ctx__name" title="${esc(meeting.name || "Recording")}">${esc(meeting.name || "Recording")}</div><div class="ctx__id">${esc(meeting.sub || "")}</div></div></div>`
+      : `<div class="ctx"><div style="width:30px;height:30px;display:grid;place-items:center;font-size:20px">🎙</div><div style="min-width:0"><div class="ctx__name">Mic recording</div><div class="ctx__id">Host mic only</div></div></div>`;
     view.innerHTML = `
-      ${ctx}
+      ${recCtx}
       <div class="rec"><div class="rec__label"><span class="dot"></span>RECORDING</div></div>
       <div class="srcchips">
-        <div class="srcchip on"><span class="d tab"></span>Online stream ${fr("tab")}</div>
-        ${st.micEnabled ? `<div class="srcchip ${micLive ? "on" : "pending"}"><span class="d mic"></span>Host mic ${micLive ? fr("mic") : "· starting…"}</div>` : ""}
+        ${showTab ? `<div class="srcchip ${tabLive ? "on" : "pending"}"><span class="d tab"></span>Online stream ${tabLive ? fr("tab") : "· starting…"}</div>` : ""}
+        ${showMic ? `<div class="srcchip ${micLive ? "on" : "pending"}"><span class="d mic"></span>Host mic ${micLive ? fr("mic") : "· starting…"}</div>` : ""}
       </div>
       <div class="meterwrap"><div class="meter on"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
       <button class="btn lg stop" id="stop">■ Stop</button>
@@ -214,18 +247,36 @@ function openMicSetup() {
   chrome.tabs.create({ url: chrome.runtime.getURL("permission.html") });
 }
 
-async function start() {
+async function start(opts = {}) {
+  const micOnly = !!opts.micOnly; // no capturable tab -> capture just the mic ("Host mic")
   const st = await chrome.storage.local.get([
     "backendBase", "deviceToken", "micEnabled", "micGranted", "micDeviceId", "micAec",
   ]);
   const note = view.querySelector(".cap-note");
   if (note) note.textContent = "Authorizing…";
-  // The new Teams web app exposes no meeting id in the URL — mint a per-capture id so the meeting
-  // is still created + authorized. (Classic Teams + Meet keep their real id.)
-  const externalMeetingId = meeting.externalMeetingId || ("web-" + crypto.randomUUID().slice(0, 8));
+
+  // Which sources to capture: the tab's audio (unless mic-only) and/or the mic.
+  const tabCapture = !micOnly && !!meeting.platform;
+  const micCapture = micOnly || (st.micEnabled && st.micGranted);
+
+  // The meeting these sources attach to. A tab capture uses the tab's meeting; a mic-only capture
+  // mints a fresh "web" meeting ("Mic recording") since there's no call/page behind it.
+  let platform, externalMeetingId, title;
+  if (tabCapture) {
+    platform = meeting.platform;
+    // The new Teams web app exposes no meeting id in the URL — mint a per-capture id so the meeting
+    // is still created + authorized. (Classic Teams + Meet keep their real id.)
+    externalMeetingId = meeting.externalMeetingId || ("web-" + crypto.randomUUID().slice(0, 8));
+    title = (meeting.platform === "web" && meeting.name) ? meeting.name : null; // name it after the tab
+  } else {
+    platform = "web";
+    externalMeetingId = "mic-" + crypto.randomUUID().slice(0, 8);
+    title = "Mic recording";
+  }
+
   try {
-    const body = { platform: meeting.platform, external_meeting_id: externalMeetingId };
-    if (meeting.platform === "web" && meeting.name) body.title = meeting.name; // name it after the tab
+    const body = { platform, external_meeting_id: externalMeetingId };
+    if (title) body.title = title;
     const r = await fetch(originOf(st.backendBase) + "/api/capture/token", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: "Bearer " + st.deviceToken },
@@ -241,34 +292,26 @@ async function start() {
       throw new Error(d || "Could not authorize this meeting");
     }
     const { token } = await r.json();
-    const res = await chrome.runtime.sendMessage({
-      type: "start",
-      tabId: activeTabId,
-      config: {
-        backendUrl: wsIngest(st.backendBase),
-        token,
-        platform: meeting.platform,
-        externalMeetingId,
-        callId: crypto.randomUUID(),
-      },
-    });
-    if (!res?.ok) throw new Error(res?.error || "capture failed to start");
-    // If the mic is enabled + permitted, add it as a SECOND source — same capability token (it's
-    // scoped to this meeting), a DISTINCT call_id, source=mic. Failure here never affects the tab.
-    if (st.micEnabled && st.micGranted) {
-      await chrome.runtime.sendMessage({
-        type: "add-mic",
-        deviceId: st.micDeviceId || null,
-        aec: !!st.micAec,
-        config: {
-          backendUrl: wsIngest(st.backendBase),
-          token,
-          platform: meeting.platform,
-          externalMeetingId,
-          callId: crypto.randomUUID(),
-        },
-      }).catch(() => {});
+    const base = { backendUrl: wsIngest(st.backendBase), token, platform, externalMeetingId };
+
+    if (tabCapture) {
+      const res = await chrome.runtime.sendMessage({
+        type: "start", tabId: activeTabId, config: { ...base, callId: crypto.randomUUID() },
+      });
+      if (!res?.ok) throw new Error(res?.error || "capture failed to start");
     }
+    // Mic as a source — DISTINCT call_id, source=mic, same meeting token. Alongside a tab it must
+    // never affect the tab (best-effort); when it's the ONLY source, a dispatch failure is fatal.
+    if (micCapture) {
+      const micRes = await chrome.runtime.sendMessage({
+        type: "add-mic", deviceId: st.micDeviceId || null, aec: !!st.micAec,
+        config: { ...base, callId: crypto.randomUUID() },
+      }).catch((e) => ({ ok: false, error: String(e) }));
+      if (!tabCapture && !micRes?.ok) throw new Error(micRes?.error || "could not start the microphone");
+    }
+
+    capTab = tabCapture;
+    capMic = micCapture;
     // Hold the recording UI through the startup window: the offscreen doc takes a beat to exist,
     // so the authoritative hasDocument() reads false for ~1s. The grace bridges that; afterwards
     // hasDocument() rules (and reverts to idle only if the capture genuinely failed).
@@ -283,6 +326,8 @@ async function start() {
 
 async function stop() {
   await chrome.runtime.sendMessage({ type: "stop" });
+  capTab = false;
+  capMic = false;
   // Hold idle through teardown (finalize + closeDocument take a beat before hasDocument() flips).
   enterGrace("idle");
   init();

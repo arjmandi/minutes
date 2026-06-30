@@ -476,8 +476,15 @@ function addSegment(s) {
   if (retry) retry.onclick = () => translateLine(id);
   if (trow) trow.replaceWith(newTrow); else tl.appendChild(newTrow);
 
-  // First time we see this source -> reveal the source selector + (re)apply the filter.
-  if (!seenSources.has(src)) { seenSources.add(src); renderSourceBar(); applySourceFilter(); }
+  // First time we see this source -> reveal the source selector + (re)apply the filter. If the
+  // current selection has produced nothing yet (e.g. a mic-only capture, default is "tab"), follow
+  // the first source that actually appears so live interim/autoscroll aren't gated to a dead source.
+  if (!seenSources.has(src)) {
+    seenSources.add(src);
+    if (!seenSources.has(selectedSource)) selectedSource = [...seenSources][0] || "tab";
+    renderSourceBar();
+    applySourceFilter();
+  }
 }
 
 async function translateLine(segId) {
@@ -845,7 +852,11 @@ function mConnectLive(meetingId, attempt = 0) {
       if (interim && (!ev.source || ev.source === mSource)) interim.style.display = "none";
       const before = mSeenSources().length;
       mSegs.push({ id: ev.id, text: ev.text, source_language: ev.language, start_ms: ev.start_ms, source: ev.source, translations: [] });
-      if (mSeenSources().length !== before) renderMobileDetail(); // reveal a new source chip
+      if (mSeenSources().length !== before) {
+        // Follow the first source that appears if the current selection produced nothing (mic-only).
+        if (!mSeenSources().includes(mSource)) mSource = mSeenSources()[0] || "tab";
+        renderMobileDetail(); // reveal a new source chip
+      }
       mRenderStream();
     } else if (ev.kind === "translation") {
       const seg = mSegs.find((s) => s.id === ev.segment_id);

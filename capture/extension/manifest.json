@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "minutes capture",
-  "version": "0.4.0",
-  "description": "Sign in to minutes and stream the active Google Meet / Teams tab audio for live transcription + translation.",
+  "version": "0.4.1",
+  "description": "Sign in to minutes and stream the active Google Meet / Teams tab audio (plus your mic, or mic-only on any tab) for live transcription + translation.",
   "permissions": ["tabCapture", "offscreen", "storage", "activeTab"],
   "host_permissions": [
     "https://meet.google.com/*",
