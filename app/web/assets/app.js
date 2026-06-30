@@ -157,6 +157,7 @@ function renderApp() {
         <div class="m-col__head"><span class="m-col__title">Transcriptions</span>
           <div style="display:flex;gap:6px;align-items:center">
             <button class="fs-btn fs-btn--sm fs-btn--ghost fs-btn--icon" id="reloadbtn" title="Reload transcriptions" aria-label="Reload transcriptions"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg></button>
+            <button class="fs-btn fs-btn--sm fs-btn--primary" id="recordbtn" title="Record with your microphone"><span style="display:inline-flex;align-items:center;gap:6px"><span style="width:9px;height:9px;border-radius:50%;background:currentColor"></span>Record</span></button>
             <button class="fs-btn fs-btn--sm fs-btn--ghost" id="uploadbtn" title="Upload audio">↑ Upload</button>
           </div>
         </div>
@@ -177,6 +178,7 @@ function renderApp() {
   root.querySelector("#uploadbtn").onclick = () => root.querySelector("#fileinput").click();
   root.querySelector("#fileinput").onchange = onUpload;
   root.querySelector("#reloadbtn").onclick = reloadMeetings;
+  root.querySelector("#recordbtn").onclick = openRecordDialog;
   renderMeetingList();
   if (selId) {
     const m = meetings.find((x) => x.id === selId);
@@ -572,6 +574,140 @@ async function onUpload(e) {
     await loadMeetings();
     renderMeetingList();
   } catch (ex) { toast(ex.message || "Upload failed", "error"); }
+}
+
+// ============================================================ NEW RECORDING (in-app mic capture)
+// A second capture client (peer to Upload + the extension): records the device mic via capture.js
+// into the same /ingest pipeline (source:"mic"), then opens the existing live viewer. Desktop flow
+// here (setup dialog + floating Stop bar); the full mobile-first PWA screens layer on next.
+let activeRecorder = null;
+let recTimer = null;
+
+async function openRecordDialog() {
+  document.getElementById("recdlg")?.remove();
+  const dlg = node(`<div id="recdlg" style="position:fixed;inset:0;z-index:60;background:rgba(27,26,23,.45);display:flex;align-items:center;justify-content:center;padding:24px">
+    <div class="fs-card" id="reccard" style="width:440px;padding:0;box-shadow:var(--fs-shadow-lg)">
+      <div class="fs-card__header"><span class="fs-card__title" style="display:flex;align-items:center;gap:9px"><span class="src-mark src-mark--mic"></span>New recording — Host mic</span></div>
+      <div class="fs-card__body" id="recbody" style="display:flex;flex-direction:column;gap:16px"></div>
+      <div class="fs-card__footer"><button class="fs-btn" id="reccancel">Cancel</button><button class="fs-btn fs-btn--primary" id="recgo" disabled><span style="display:inline-flex;align-items:center;gap:7px"><span style="width:11px;height:11px;border-radius:50%;background:currentColor"></span>Record</span></button></div>
+    </div></div>`);
+  document.body.appendChild(dlg);
+  const body = dlg.querySelector("#recbody");
+  let meterStream = null, meterCtx = null, meterRaf = 0;
+  const stopMeter = () => { if (meterRaf) cancelAnimationFrame(meterRaf); try { meterStream?.getTracks().forEach((t) => t.stop()); } catch {} try { meterCtx?.close(); } catch {} meterStream = null; meterCtx = null; };
+  const close = () => { stopMeter(); dlg.remove(); document.removeEventListener("keydown", onEsc); };
+  const onEsc = (e) => { if (e.key === "Escape") close(); };
+  document.addEventListener("keydown", onEsc);
+  dlg.onclick = close;
+  dlg.querySelector("#reccard").onclick = (e) => e.stopPropagation();
+  dlg.querySelector("#reccancel").onclick = close;
+
+  try {
+    meterStream = await navigator.mediaDevices.getUserMedia({ audio: { noiseSuppression: true, autoGainControl: true } });
+  } catch {
+    body.innerHTML = `<div style="text-align:center;padding:8px 0"><div style="font-weight:600;margin-bottom:6px">Microphone is blocked</div><div style="font-size:var(--fs-text-sm);color:var(--fs-ink-secondary);line-height:1.5">Allow microphone access for this site in your browser's site settings, then reopen — or upload an audio file instead.</div></div>`;
+    return;
+  }
+  body.innerHTML = `
+    <div class="fs-field fs-field--block"><label class="fs-label">Level — speak to confirm</label>
+      <div class="lvl-wrap"><div class="lvl" id="reclvl">${Array.from({ length: 16 }, () => "<i></i>").join("")}</div>
+      <div class="lvl-wrap__cap"><span>input level</span><span id="reccap">speak to test…</span></div></div></div>
+    <div class="fs-field fs-field--block"><label class="fs-label">Name <span style="color:var(--fs-ink-muted);font-weight:400">· optional</span></label><input class="fs-input" id="recname" placeholder="e.g. Standup note"/></div>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:14px"><div><div style="font-size:14px;font-weight:600">Echo cancellation</div><div style="font-size:12px;color:var(--fs-ink-secondary)">Default off — can clip your voice on headphones.</div></div><label class="fs-switch" id="recaec"><span class="fs-switch__track"><span class="fs-switch__thumb"></span></span></label></div>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:14px"><div><div style="font-size:14px;font-weight:600">Silence-suspend</div><div style="font-size:12px;color:var(--fs-ink-secondary)">Default on — saves Soniox cost in silence.</div></div><label class="fs-switch is-on" id="recsil"><span class="fs-switch__track"><span class="fs-switch__thumb"></span></span></label></div>`;
+  dlg.querySelector("#recgo").disabled = false;
+  body.querySelectorAll(".fs-switch").forEach((sw) => (sw.onclick = () => sw.classList.toggle("is-on")));
+
+  meterCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const an = meterCtx.createAnalyser();
+  an.fftSize = 64;
+  meterCtx.createMediaStreamSource(meterStream).connect(an);
+  const bins = new Uint8Array(an.frequencyBinCount);
+  const bars = [...body.querySelectorAll("#reclvl i")];
+  const cap = body.querySelector("#reccap");
+  const tick = () => {
+    an.getByteFrequencyData(bins);
+    let s = 0;
+    bars.forEach((b, i) => { const v = bins[i] / 255; s += v; b.style.height = Math.max(8, Math.round(v * 100)) + "%"; b.style.opacity = v > 0.08 ? 1 : 0.18; });
+    if (cap) { const on = s / bars.length > 0.04; cap.textContent = on ? "● picking up audio" : "speak to test…"; cap.style.color = on ? "var(--fs-success)" : "var(--fs-ink-muted)"; }
+    meterRaf = requestAnimationFrame(tick);
+  };
+  tick();
+
+  dlg.querySelector("#recgo").onclick = async () => {
+    const name = body.querySelector("#recname").value.trim();
+    const aec = body.querySelector("#recaec").classList.contains("is-on");
+    const silence = body.querySelector("#recsil").classList.contains("is-on");
+    stopMeter(); // release the test stream; the recorder re-acquires (permission already granted)
+    close();
+    await recordStart({ name, aec, silence });
+  };
+}
+
+async function recordStart({ name, aec, silence }) {
+  const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.round(performance.now()));
+  const externalId = "rec-" + uid().slice(0, 12);
+  const title = name || ("Recording · " + new Date().toLocaleString());
+  let token;
+  try {
+    const r = await fetch("/api/capture/token", {
+      method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ platform: "web", external_meeting_id: externalId, title }),
+    });
+    if (!r.ok) { let d; try { d = (await r.json()).detail; } catch {} throw new Error(d || "could not authorize recording"); }
+    token = (await r.json()).token;
+  } catch (e) { toast(e.message || "Could not start recording", "error"); return; }
+
+  activeRecorder = new MinutesRecorder({
+    wsUrl: location.origin.replace(/^http/, "ws") + "/ingest",
+    token, platform: "web", externalMeetingId: externalId, callId: uid(), aec, silence,
+    onState: (state, detail) => {
+      if (state === "error") { toast(recErr(detail), "error"); recBarEnd(false); }
+      else if (state === "ended") recBarEnd(true);
+    },
+  });
+  await activeRecorder.start();
+  showRecBar(title);
+  // The ingest upserts the meeting on `hello` — find it + open the existing live viewer.
+  for (let i = 0; i < 20 && activeRecorder && !activeRecorder.ended; i++) {
+    await loadMeetings();
+    const m = meetings.find((x) => x.external_meeting_id === externalId);
+    if (m) { renderMeetingList(); selectMeeting(m); break; }
+    await new Promise((res) => setTimeout(res, 500));
+  }
+}
+
+function recErr(detail) {
+  if (detail === "mic_denied") return "Microphone was blocked";
+  if (detail === "connection_lost") return "Connection lost — recording stopped";
+  return "Transcription stopped" + (typeof detail === "string" && detail ? ": " + detail : "");
+}
+
+function recordStop() { if (activeRecorder) activeRecorder.stop(); }
+
+function showRecBar(title) {
+  document.getElementById("recbar")?.remove();
+  const start = Date.now();
+  const bar = node(`<div id="recbar" style="position:fixed;left:50%;transform:translateX(-50%);bottom:18px;z-index:55;display:flex;align-items:center;gap:14px;padding:10px 14px;border-radius:14px;background:var(--fs-ink);color:var(--fs-bg);box-shadow:var(--fs-shadow-lg)">
+    <span class="live__rec" style="color:var(--fs-accent)"><i></i></span>
+    <span id="rectimer" style="font-family:var(--fs-font-mono);font-size:15px;font-variant-numeric:tabular-nums">00:00</span>
+    <span style="font-size:13px;opacity:.85;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(title)}</span>
+    <button class="btn-stop" id="recstop" style="min-height:38px;padding:8px 16px"><span class="sq"></span>Stop</button></div>`);
+  document.body.appendChild(bar);
+  bar.querySelector("#recstop").onclick = recordStop;
+  recTimer = setInterval(() => {
+    const el = document.getElementById("rectimer");
+    if (!el) return;
+    const s = Math.floor((Date.now() - start) / 1000);
+    el.textContent = String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
+  }, 1000);
+}
+
+function recBarEnd(saved) {
+  if (recTimer) { clearInterval(recTimer); recTimer = null; }
+  document.getElementById("recbar")?.remove();
+  activeRecorder = null;
+  if (saved) { toast("Recording saved", "info"); loadMeetings().then(renderMeetingList); }
 }
 
 // ============================================================ SETTINGS
