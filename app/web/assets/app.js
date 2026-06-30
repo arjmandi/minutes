@@ -640,51 +640,56 @@ async function openRecordDialog() {
     const silence = body.querySelector("#recsil").classList.contains("is-on");
     stopMeter(); // release the test stream; the recorder re-acquires (permission already granted)
     close();
-    await recordStart({ name, aec, silence });
+    await recDesktopStart({ name, aec, silence });
   };
 }
 
-async function recordStart({ name, aec, silence }) {
-  const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.round(performance.now()));
-  const externalId = "rec-" + uid().slice(0, 12);
-  const title = name || ("Recording · " + new Date().toLocaleString());
-  let token;
-  try {
-    const r = await fetch("/api/capture/token", {
-      method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ platform: "web", external_meeting_id: externalId, title }),
-    });
-    if (!r.ok) { let d; try { d = (await r.json()).detail; } catch {} throw new Error(d || "could not authorize recording"); }
-    token = (await r.json()).token;
-  } catch (e) { toast(e.message || "Could not start recording", "error"); return; }
-
-  activeRecorder = new MinutesRecorder({
-    wsUrl: location.origin.replace(/^http/, "ws") + "/ingest",
-    token, platform: "web", externalMeetingId: externalId, callId: uid(), aec, silence,
-    onState: (state, detail) => {
-      if (state === "error") { toast(recErr(detail), "error"); recBarEnd(false); }
-      else if (state === "ended") recBarEnd(true);
-    },
-  });
-  await activeRecorder.start();
-  showRecBar(title);
-  // The ingest upserts the meeting on `hello` — find it + open the existing live viewer.
-  for (let i = 0; i < 20 && activeRecorder && !activeRecorder.ended; i++) {
-    await loadMeetings();
-    const m = meetings.find((x) => x.external_meeting_id === externalId);
-    if (m) { renderMeetingList(); selectMeeting(m); break; }
-    await new Promise((res) => setTimeout(res, 500));
-  }
-}
-
+const recUid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.round(performance.now()));
 function recErr(detail) {
   if (detail === "mic_denied") return "Microphone was blocked";
   if (detail === "connection_lost") return "Connection lost — recording stopped";
   return "Transcription stopped" + (typeof detail === "string" && detail ? ": " + detail : "");
 }
-
 function recordStop() { if (activeRecorder) activeRecorder.stop(); }
 
+// Mint a meeting-scoped token (cookie session) + start the recorder. Returns {externalId, title}.
+async function recMintAndStart({ name, aec, silence, onState, onLevel }) {
+  const externalId = "rec-" + recUid().slice(0, 12);
+  const title = name || ("Recording · " + new Date().toLocaleString());
+  const r = await fetch("/api/capture/token", {
+    method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ platform: "web", external_meeting_id: externalId, title }),
+  });
+  if (!r.ok) { let d; try { d = (await r.json()).detail; } catch {} throw new Error(d || "could not authorize recording"); }
+  const token = (await r.json()).token;
+  activeRecorder = new MinutesRecorder({
+    wsUrl: location.origin.replace(/^http/, "ws") + "/ingest",
+    token, platform: "web", externalMeetingId: externalId, callId: recUid(), aec, silence, onState, onLevel,
+  });
+  await activeRecorder.start();
+  return { externalId, title };
+}
+// Poll the meeting list until the recording's meeting appears (the ingest upserts it on `hello`).
+async function recFindMeeting(externalId, onFound) {
+  for (let i = 0; i < 24 && activeRecorder && !activeRecorder.ended; i++) {
+    await loadMeetings();
+    const m = meetings.find((x) => x.external_meeting_id === externalId);
+    if (m) { onFound(m); return; }
+    await new Promise((res) => setTimeout(res, 500));
+  }
+}
+
+/* ---------- DESKTOP: floating Stop bar over the existing viewer ---------- */
+async function recDesktopStart({ name, aec, silence }) {
+  try {
+    const { externalId, title } = await recMintAndStart({
+      name, aec, silence,
+      onState: (s, d) => { if (s === "error") { toast(recErr(d), "error"); recDesktopEnd(false); } else if (s === "ended") recDesktopEnd(true); },
+    });
+    showRecBar(title);
+    recFindMeeting(externalId, (m) => { renderMeetingList(); selectMeeting(m); });
+  } catch (e) { toast(e.message || "Could not start recording", "error"); }
+}
 function showRecBar(title) {
   document.getElementById("recbar")?.remove();
   const start = Date.now();
@@ -702,12 +707,193 @@ function showRecBar(title) {
     el.textContent = String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
   }, 1000);
 }
-
-function recBarEnd(saved) {
+function recDesktopEnd(saved) {
   if (recTimer) { clearInterval(recTimer); recTimer = null; }
   document.getElementById("recbar")?.remove();
   activeRecorder = null;
   if (saved) { toast("Recording saved", "info"); loadMeetings().then(renderMeetingList); }
+}
+
+/* ---------- MOBILE: full-screen PWA flow (setup -> live -> done) ---------- */
+const REC_MIC_SVG = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="9" y="2.5" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>`;
+const REC_WARN_SVG = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2.5 20h19L12 3Z"/><path d="M12 9.5v5M12 17.5h.01"/></svg>`;
+const REC_WAKE_SVG = `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="10" cy="10" r="3"/><path d="M10 2.5v2M10 15.5v2M17.5 10h-2M4.5 10h-2M15.3 4.7l-1.4 1.4M6.1 13.9l-1.4 1.4M15.3 15.3l-1.4-1.4M6.1 6.1 4.7 4.7"/></svg>`;
+let mRecPhase = "setup";        // setup | live | done
+let mRecBanner = "";            // error banner HTML in the live view
+let mRecMeta = null;            // { length, lines, lang, id }
+let mRecMeterStream = null, mRecMeterCtx = null, mRecMeterRaf = 0;
+let mRecTimerId = null, mRecStartTs = 0;
+
+function mStartRecordFlow() { mView = "record"; mRecPhase = "setup"; mRecBanner = ""; mRecMeta = null; renderMobileRecord(); }
+function mRecStopMeter() {
+  if (mRecMeterRaf) cancelAnimationFrame(mRecMeterRaf);
+  try { mRecMeterStream?.getTracks().forEach((t) => t.stop()); } catch {}
+  try { mRecMeterCtx?.close(); } catch {}
+  mRecMeterStream = null; mRecMeterCtx = null; mRecMeterRaf = 0;
+}
+function renderMobileRecord() {
+  if (mRecPhase === "live") return mRecLive();
+  if (mRecPhase === "done") return mRecDone();
+  return mRecSetup();
+}
+function mRecHead(title) {
+  return `<div class="mdhead"><div class="mdhead__top">
+    <button class="mdback" id="mreccancel">${M_BACK}Cancel</button>
+    <div class="mdhead__title" style="text-align:center"><b>${esc(title)}</b></div><span style="width:60px"></span></div></div>`;
+}
+
+async function mRecSetup() {
+  root.innerHTML = `<div class="mob"><div class="pwa">${mRecHead("New recording")}
+    <div class="mob__scroll"><div class="setup" id="recsetup"><div class="m-empty__sub" style="padding:40px 0;text-align:center">Requesting microphone…</div></div></div></div></div>`;
+  root.querySelector("#mreccancel").onclick = () => { mRecStopMeter(); mView = "list"; renderMobileApp(); };
+  try { mRecMeterStream = await navigator.mediaDevices.getUserMedia({ audio: { noiseSuppression: true, autoGainControl: true } }); }
+  catch { return mRecSetupDenied(); }
+  const wrap = root.querySelector("#recsetup");
+  if (!wrap) { mRecStopMeter(); return; } // navigated away while requesting
+  wrap.innerHTML = `
+    <div class="setup__head"><span class="mic-badge">${REC_MIC_SVG}</span><div><h2>Ready to record</h2><p>Host mic · transcribes as you speak</p></div></div>
+    <div class="active-input"><span class="active-input__ic">${REC_MIC_SVG}</span><div class="active-input__body"><b id="recdev">Microphone</b><span>active input</span></div><span class="active-input__note">device set by your OS</span></div>
+    <div class="lvl-wrap"><div class="lvl" id="reclvl">${Array.from({ length: 16 }, () => "<i></i>").join("")}</div><div class="lvl-wrap__cap"><span>speak to test</span><span id="reccap">…</span></div></div>
+    <div class="fs-field fs-field--block" style="margin-top:2px"><label class="fs-label">Name <span style="color:var(--fs-ink-muted);font-weight:400">· optional</span></label><input class="fs-input" id="recname" placeholder="e.g. Standup note" style="min-height:46px"/></div>
+    <div class="setup-row" style="border-top:none;padding-top:6px"><div><div class="setup-row__t">Echo cancellation</div><div class="setup-row__d">Leave off on headphones — it can clip your voice.<span class="dflt">default off</span></div></div><label class="fs-switch" id="recaec"><span class="fs-switch__track"><span class="fs-switch__thumb"></span></span></label></div>
+    <div class="setup-row"><div><div class="setup-row__t">Silence-suspend</div><div class="setup-row__d">Pause transcription during long silences to save Soniox cost.<span class="dflt">default on</span></div></div><label class="fs-switch is-on" id="recsil"><span class="fs-switch__track"><span class="fs-switch__thumb"></span></span></label></div>`;
+  root.querySelector(".pwa").appendChild(node(`<div class="rec-deck"><button class="rec-btn-big" id="recgo"><span class="dot"></span>Record</button></div>`));
+  try { const lbl = mRecMeterStream.getAudioTracks()[0]?.label; if (lbl) root.querySelector("#recdev").textContent = lbl; } catch {}
+  wrap.querySelectorAll(".fs-switch").forEach((sw) => (sw.onclick = () => sw.classList.toggle("is-on")));
+  const an = (mRecMeterCtx = new (window.AudioContext || window.webkitAudioContext)()).createAnalyser();
+  an.fftSize = 64;
+  mRecMeterCtx.createMediaStreamSource(mRecMeterStream).connect(an);
+  const bins = new Uint8Array(an.frequencyBinCount), bars = [...wrap.querySelectorAll("#reclvl i")], cap = wrap.querySelector("#reccap");
+  const tick = () => {
+    an.getByteFrequencyData(bins);
+    let s = 0;
+    bars.forEach((b, i) => { const v = bins[i] / 255; s += v; b.style.height = Math.max(8, Math.round(v * 100)) + "%"; b.classList.toggle("is-on", v > 0.08); });
+    if (cap) { const on = s / bars.length > 0.04; cap.textContent = on ? "● picking up audio" : "speak to test"; cap.style.color = on ? "var(--m-ok)" : "var(--fs-ink-muted)"; }
+    mRecMeterRaf = requestAnimationFrame(tick);
+  };
+  tick();
+  root.querySelector("#recgo").onclick = () => {
+    const name = wrap.querySelector("#recname").value.trim();
+    const aec = wrap.querySelector("#recaec").classList.contains("is-on");
+    const silence = wrap.querySelector("#recsil").classList.contains("is-on");
+    mRecStopMeter();
+    mRecStart({ name, aec, silence });
+  };
+}
+function mRecSetupDenied() {
+  const wrap = root.querySelector("#recsetup");
+  if (!wrap) return;
+  wrap.innerHTML = `<div class="perm__ic perm__ic--warn" style="width:50px;height:50px;border-radius:14px;margin-bottom:16px;background:var(--fs-warning-soft);color:var(--fs-warning);display:grid;place-items:center">${REC_WARN_SVG}</div>
+    <div style="font-size:22px;font-weight:600;letter-spacing:-0.02em;margin-bottom:8px">Microphone is off</div>
+    <p style="font-size:15px;color:var(--fs-ink-secondary);line-height:1.5;margin:0 0 18px">Your browser is blocking the mic for minutes. Turn it on for this site, then tap Record. On iOS: Settings → minutes → Microphone.</p>
+    <button class="fs-btn fs-btn--lg" style="width:100%" id="recretry">↻ I've enabled it — try again</button>`;
+  wrap.querySelector("#recretry").onclick = () => mRecSetup();
+}
+
+async function mRecStart({ name, aec, silence }) {
+  mRecPhase = "live"; mRecBanner = ""; selId = null; mSegs = []; mSeg = "tx"; mSource = "mic";
+  renderMobileRecord();
+  let externalId;
+  try {
+    ({ externalId } = await recMintAndStart({ name, aec, silence, onState: mRecOnState, onLevel: mRecMeterLevel }));
+  } catch (e) { toast(e.message || "Could not start recording", "error"); mView = "list"; return renderMobileApp(); }
+  mRecStartTs = Date.now();
+  mRecStartTimer();
+  recFindMeeting(externalId, (m) => { selId = m.id; mSegs = []; mConnectLive(m.id); });
+}
+function mRecStartTimer() {
+  if (mRecTimerId) clearInterval(mRecTimerId);
+  mRecTimerId = setInterval(() => {
+    const el = root.querySelector("#rectimer");
+    if (!el) return;
+    const s = Math.floor((Date.now() - mRecStartTs) / 1000);
+    el.textContent = String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
+  }, 1000);
+}
+function mRecMeterLevel(lvl) {
+  const bars = root.querySelectorAll("#reclmeter i");
+  if (!bars.length) return;
+  bars.forEach((b, i) => {
+    const h = Math.max(0.12, Math.min(1, lvl * (0.6 + 0.5 * Math.abs(Math.sin(i * 1.3 + Date.now() / 120)))));
+    b.style.transform = "scaleY(" + h + ")";
+    b.classList.toggle("is-off", lvl < 0.04);
+  });
+}
+function mRecLive() {
+  root.innerHTML = `<div class="mob"><div class="pwa"><div class="live">
+    <div class="live__deck">
+      <div class="live__statusline"><span class="live__rec"><i></i>RECORDING</span><span class="live__src"><span class="src-mark src-mark--mic"></span>Host mic</span></div>
+      <div class="live__timer" id="rectimer">00:00</div>
+      <div class="live__meterrow"><div class="live__meter" id="reclmeter">${Array.from({ length: 12 }, () => '<i class="is-off"></i>').join("")}</div>
+        <span class="live__stop"><button class="btn-stop" id="recstop"><span class="sq"></span>Stop</button></span></div>
+      <div class="wakelock">${REC_WAKE_SVG}<span>Screen stays on while recording</span></div>
+    </div>
+    <div class="live__streamhead"><b>Transcript</b><span class="auto"><span class="m-dot m-dot--ok" style="width:6px;height:6px"></span>Auto-scroll</span></div>
+    <div class="live__banner" id="recbanner">${mRecBanner}</div>
+    <div class="live__stream"><div class="mstream" id="mstream"></div></div>
+    <div class="minterim" id="minterim" style="display:none"><span class="caret"></span><span id="minterimtxt">listening…</span></div>
+  </div></div></div>`;
+  root.querySelector("#recstop").onclick = recordStop;
+  mRecWireBanner();
+  mRenderStream();
+}
+function mRecWireBanner() {
+  root.querySelectorAll("[data-recfinish]").forEach((b) => (b.onclick = recordStop));
+  root.querySelectorAll("[data-recplan]").forEach((b) => (b.onclick = () => window.open("https://console.soniox.com/", "_blank")));
+}
+function mRecOnState(state, detail) {
+  if (state === "ended") {
+    if (mRecTimerId) { clearInterval(mRecTimerId); mRecTimerId = null; }
+    const s = Math.floor((Date.now() - mRecStartTs) / 1000);
+    mRecMeta = { length: String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0"), lines: mSegs.length, lang: (mSegs[0]?.source_language || "—").toUpperCase(), id: selId };
+    activeRecorder = null;
+    if (ws) { ws.close(); ws = null; } // stop the live-transcript socket; the meeting is finalized
+    mRecPhase = "done";
+    if (mView === "record") renderMobileRecord();
+    return;
+  }
+  if (state === "error") {
+    const msg = recErr(detail);
+    const isQuota = detail && detail !== "mic_denied" && detail !== "connection_lost";
+    mRecBanner = `<div class="m-banner m-banner--error" style="flex-direction:column;align-items:flex-start;gap:7px;padding:12px 14px">
+      <div style="display:flex;align-items:center;gap:8px;font-weight:600"><span style="font-weight:700">✕</span>${esc(msg)}</div>
+      <div style="font-size:13px;line-height:1.45;color:var(--fs-danger)">Audio kept recording up to now — saved to the transcript.</div>
+      <div style="display:flex;gap:8px;margin-top:2px">${isQuota ? `<button class="fs-btn fs-btn--sm" data-recplan>Check Soniox plan</button>` : ""}<button class="fs-btn fs-btn--sm" data-recfinish>Finish &amp; save</button></div></div>`;
+    if (mView === "record" && mRecPhase === "live") {
+      const b = root.querySelector("#recbanner");
+      if (b) { b.innerHTML = mRecBanner; mRecWireBanner(); } else renderMobileRecord();
+    }
+  }
+}
+function mRecDone() {
+  const m = mRecMeta || { length: "—", lines: 0, lang: "—" };
+  root.innerHTML = `<div class="mob"><div class="pwa"><div style="flex:1;display:flex;flex-direction:column;justify-content:center;padding:0 8px">
+    <div class="done-sheet">
+      <div class="done-sheet__ic"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5 10 17.5 19 7"/></svg></div>
+      <h3>Recording saved</h3>
+      <p>Saved as a meeting. Transcription finishes in the background — translation runs if it's on.</p>
+      <div class="done-sheet__meta"><div><b>${esc(m.length)}</b><span>length</span></div><div><b>${m.lines}</b><span>lines</span></div><div><b>${esc(m.lang)}</b><span>detected</span></div></div>
+      <div class="done-sheet__actions"><button class="fs-btn fs-btn--primary fs-btn--lg" id="recopen">Open transcript →</button><button class="fs-btn" id="recanother">Record another</button></div>
+    </div></div></div></div>`;
+  root.querySelector("#recopen").onclick = async () => {
+    await loadMeetings();
+    const mm = m.id && meetings.find((x) => x.id === m.id);
+    if (mm) mOpenMeeting(mm); else { mView = "list"; renderMobileApp(); }
+  };
+  root.querySelector("#recanother").onclick = () => mStartRecordFlow();
+}
+
+// "Add to Home Screen" coachmark: iOS Safari has no install prompt, so guide the user once.
+function maybeShowA2HS() {
+  try {
+    const standalone = window.navigator.standalone || window.matchMedia("(display-mode: standalone)").matches;
+    const iOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+    if (standalone || !iOS || localStorage.getItem("a2hs-dismissed")) return;
+    if (document.getElementById("a2hs")) return;
+    const el = node(`<div class="a2hs" id="a2hs"><div class="a2hs__body"><b>Install minutes</b> — tap Share, then <b>Add to Home Screen</b> for a full-screen app.</div><button class="a2hs__x" id="a2hsx">✕</button></div>`);
+    document.body.appendChild(el);
+    el.querySelector("#a2hsx").onclick = () => { try { localStorage.setItem("a2hs-dismissed", "1"); } catch {} el.remove(); };
+  } catch { /* ignore */ }
 }
 
 // ============================================================ SETTINGS
@@ -826,6 +1012,7 @@ const mtClass = (p) => (["upload", "teams", "web", "meet"].includes(p) ? p : "in
 const mtLetter = (p) => (p || "?")[0].toUpperCase();
 
 function renderMobileApp() {
+  if (mView === "record") return renderMobileRecord();
   if (mView === "settings") return renderMobileSettings();
   if (mView === "detail" && meetings.find((x) => x.id === selId)) return renderMobileDetail();
   mView = "list";
@@ -850,6 +1037,11 @@ function renderMobileList() {
           <button class="icon-btn" id="mreload" aria-label="Reload"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg></button>
         </div>
       </div>
+      <div style="padding:0 16px 12px">
+        <button class="rec-cta" id="mreccta"><span class="rec-cta__dot"></span>Record</button>
+        <div class="entry-or">or</div>
+        <button class="fs-btn fs-btn--lg upload-link" id="muploadlink">${M_UP} Upload audio file</button>
+      </div>
       <div class="mlist" id="mlist"></div>
     </div>
   </div>
@@ -862,7 +1054,10 @@ function renderMobileList() {
     const b = e.currentTarget; b.classList.add("is-loading");
     try { await loadMeetings(); mRenderList(); } finally { b.classList.remove("is-loading"); }
   };
+  root.querySelector("#mreccta").onclick = mStartRecordFlow;
+  root.querySelector("#muploadlink").onclick = () => root.querySelector("#mfileinput").click();
   mRenderList();
+  maybeShowA2HS();
 }
 
 function mRenderList() {
@@ -969,7 +1164,7 @@ function mRenderStream() {
   if (!segs.length) { el.innerHTML = `<div class="m-empty" style="padding:40px 0"><div class="m-empty__sub">No transcript yet.</div></div>`; return; }
   el.innerHTML = segs.map((s) => (mSeg === "tx" ? mLine(s) : mTrLine(s))).join("");
   el.querySelectorAll("[data-retry]").forEach((b) => (b.onclick = () => mTranslateLine(b.getAttribute("data-retry"))));
-  const sc = root.querySelector(".mob__scroll");
+  const sc = root.querySelector(".mob__scroll") || root.querySelector(".live__stream");
   if (sc) sc.scrollTop = sc.scrollHeight;
 }
 
