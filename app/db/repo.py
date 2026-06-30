@@ -16,6 +16,7 @@ from sqlalchemy.orm import selectinload
 from app.db.models import (
     AudioChunk,
     AuthToken,
+    CaptureSource,
     ChunkState,
     ConfigChange,
     ConsentStatus,
@@ -32,6 +33,11 @@ from app.db.models import (
     TranslationStatus,
     User,
 )
+
+
+class SourceConflict(RuntimeError):
+    """A live capture session already owns this (meeting, source), or a call_id is bound to a
+    different source. The ingest layer turns this into a {type:"conflict"} reply."""
 
 
 async def upsert_meeting(
@@ -69,13 +75,23 @@ async def create_session(
     meeting_id: uuid.UUID,
     platform_call_id: str,
     run_id: str,
+    source: CaptureSource = CaptureSource.tab,
     config_snapshot: dict | None = None,
 ) -> Session:
     """Create the session row, or take over a prior session with the same platform_call_id
-    (sequential reconnect): reclaim it under our run_id and re-activate."""
+    (sequential reconnect): reclaim it under our run_id and re-activate.
+
+    Two DB invariants can reject the insert (caught as IntegrityError):
+      - ``uq_session_platform_call_id`` (same call_id) -> sequential reconnect: take over, but
+        REFUSE if the existing session's source differs (a call_id must not switch sources).
+      - ``uq_active_session_per_source`` (a DIFFERENT call_id but another LIVE session already owns
+        this (meeting, source)) -> a genuine conflict (e.g. a flapping mic minting a fresh id);
+        raise ``SourceConflict`` instead of fragmenting the timeline.
+    """
     session = Session(
         meeting_id=meeting_id,
         platform_call_id=platform_call_id,
+        source=source,
         status=SessionStatus.active,
         run_id=run_id,
         config_snapshot=config_snapshot,
@@ -88,7 +104,17 @@ async def create_session(
     except IntegrityError:
         existing = (
             await db.execute(select(Session).where(Session.platform_call_id == platform_call_id))
-        ).scalar_one()
+        ).scalar_one_or_none()
+        if existing is None:
+            # No row with this call_id -> the partial-unique-active index fired: another live
+            # session already owns this (meeting, source).
+            raise SourceConflict(
+                f"a live {source} session already exists for meeting {meeting_id}"
+            ) from None
+        if existing.source != source:
+            raise SourceConflict(
+                f"call_id is bound to source {existing.source}, not {source}"
+            ) from None
         existing.run_id = run_id  # fence takeover
         existing.status = SessionStatus.active
         existing.left_at = None
@@ -452,26 +478,47 @@ async def get_meeting_by_share_token(db: AsyncSession, token: str) -> Meeting | 
 
 
 async def transcript_for_meeting(
-    db: AsyncSession, meeting_id: uuid.UUID, *, after_seq: int = 0, limit: int = 500
-) -> list[tuple[TranscriptSegment, datetime]]:
+    db: AsyncSession,
+    meeting_id: uuid.UUID,
+    *,
+    after_seq: int = 0,
+    limit: int = 500,
+    source: CaptureSource | None = None,
+) -> list[tuple[TranscriptSegment, datetime, CaptureSource]]:
     """Final segments across the meeting's sessions, ordered by meeting_seq, translations eager.
 
-    Each row is ``(segment, session_joined_at)`` — the session's join time is the media epoch, so
-    absolute wall-clock timing is ``joined_at + start_ts`` (correct even across reconnect sessions,
-    where each session's relative ``start_ts`` resets to 0).
+    Each row is ``(segment, session_joined_at, source)`` — the session's join time is the media
+    epoch, so absolute wall-clock timing is ``joined_at + start_ts`` (correct even across reconnect
+    sessions, where each session's relative ``start_ts`` resets to 0); ``source`` is the segment's
+    capture source (derived from its session).
 
-    Paged: returns at most ``limit`` segments with meeting_seq > after_seq; the caller pages by the
-    max returned meeting_seq.
+    ``source=None`` returns ALL sources (the default — a mic-only/upload meeting must not come back
+    empty). Pass a concrete source to filter to one. Paged by meeting_seq > after_seq.
     """
-    rows = await db.execute(
-        select(TranscriptSegment, Session.joined_at)
+    stmt = (
+        select(TranscriptSegment, Session.joined_at, Session.source)
         .join(Session, TranscriptSegment.session_id == Session.id)
         .where(Session.meeting_id == meeting_id, TranscriptSegment.meeting_seq > after_seq)
         .order_by(TranscriptSegment.meeting_seq)
         .limit(limit)
         .options(selectinload(TranscriptSegment.translations))
     )
-    return [(seg, joined_at) for seg, joined_at in rows.all()]
+    if source is not None:
+        stmt = stmt.where(Session.source == source)
+    rows = await db.execute(stmt)
+    return [(seg, joined_at, src) for seg, joined_at, src in rows.all()]
+
+
+async def distinct_sources(db: AsyncSession, meeting_id: uuid.UUID) -> list[CaptureSource]:
+    """The capture sources a meeting actually has sessions for, deterministically ordered.
+    ``[]`` for a meeting with no sessions yet. Used by detail/share endpoints (NOT the list)."""
+    rows = await db.execute(
+        select(Session.source)
+        .where(Session.meeting_id == meeting_id)
+        .distinct()
+        .order_by(Session.source)
+    )
+    return [r for (r,) in rows.all()]
 
 
 # --- control plane (spec v3 §8) ---

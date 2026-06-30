@@ -18,11 +18,13 @@ from sqlalchemy import (
     BigInteger,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy import (
     Enum as SAEnum,
@@ -38,6 +40,14 @@ class Platform(enum.StrEnum):
     meet = "meet"
     upload = "upload"  # an uploaded audio file transcribed as a (single-session) meeting
     web = "web"  # generic browser-tab audio capture (any site, not just Meet/Teams)
+
+
+class CaptureSource(enum.StrEnum):
+    """Which audio source a capture session carries (dual-source capture)."""
+
+    tab = "tab"  # the browser tab's audio — other participants / a video ("Online stream")
+    mic = "mic"  # the capturing user's own microphone ("Host mic")
+    upload = "upload"  # an uploaded audio file transcribed as a single-session meeting
 
 
 class SessionStatus(enum.StrEnum):
@@ -131,13 +141,33 @@ class Meeting(Base):
 
 class Session(Base):
     __tablename__ = "sessions"
-    __table_args__ = (UniqueConstraint("platform_call_id", name="uq_session_platform_call_id"),)
+    __table_args__ = (
+        UniqueConstraint("platform_call_id", name="uq_session_platform_call_id"),
+        Index("ix_sessions_meeting_source", "meeting_id", "source"),
+        # At most one LIVE session per (meeting, source) — a flapping mic can't fragment the
+        # timeline into interleaved columns; a second live one hits IntegrityError -> CONFLICT.
+        Index(
+            "uq_active_session_per_source",
+            "meeting_id",
+            "source",
+            unique=True,
+            postgresql_where=text("status IN ('joining', 'active')"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = _uuid_col()
     meeting_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("meetings.id", ondelete="CASCADE"), nullable=False, index=True
     )
     platform_call_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    # Which audio source this session carries (dual-source capture). One Soniox connection ==
+    # one Session; a segment's source is derived by JOIN. NULL-free, defaults to tab.
+    source: Mapped[CaptureSource] = mapped_column(
+        SAEnum(CaptureSource, name="capture_source"),
+        default=CaptureSource.tab,
+        server_default="tab",
+        nullable=False,
+    )
     status: Mapped[SessionStatus] = mapped_column(
         SAEnum(SessionStatus, name="session_status"),
         default=SessionStatus.joining,

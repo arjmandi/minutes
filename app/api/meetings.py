@@ -24,7 +24,14 @@ from app import fanout
 from app.auth.dependencies import require_user, ws_user
 from app.auth.sessions import new_opaque_token
 from app.db import repo
-from app.db.models import ConsentStatus, Meeting, TranslationSource, TranslationStatus, User
+from app.db.models import (
+    CaptureSource,
+    ConsentStatus,
+    Meeting,
+    TranslationSource,
+    TranslationStatus,
+    User,
+)
 from app.logging import get_logger
 from app.translate.resolve import build_user_translator
 
@@ -79,10 +86,21 @@ def _abs_ts(joined_at: datetime, offset: float | None) -> str | None:
     return (joined_at + timedelta(seconds=offset)).isoformat() if offset is not None else None
 
 
-def _segment_dict(seg, joined_at: datetime) -> dict:
+def _parse_source(value: str | None) -> CaptureSource | None:
+    """Query-param source filter: None/'' -> all sources; a valid CaptureSource -> it; else 422."""
+    if not value:
+        return None
+    try:
+        return CaptureSource(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="invalid source") from exc
+
+
+def _segment_dict(seg, joined_at: datetime, source: CaptureSource = CaptureSource.tab) -> dict:
     return {
         "id": str(seg.id),
         "meeting_seq": seg.meeting_seq,
+        "source": source.value,
         "speaker_id": seg.speaker_id,
         "start_ts": seg.start_ts,
         "end_ts": seg.end_ts,
@@ -231,7 +249,7 @@ def _export_payload(
     omits the external meeting id — matching the share-link contract.
     """
     lang = lang or meeting.translation_output_language
-    epoch = min((j for _, j in rows), default=None)
+    epoch = min((j for _, j, _s in rows), default=None)
 
     def stamp(seg, joined_at: datetime) -> str:
         if not timestamps or epoch is None:
@@ -253,7 +271,7 @@ def _export_payload(
     if fmt == "json":
         return {
             "meeting": public_meeting_dict(meeting) if public else _meeting_dict(meeting),
-            "segments": [_segment_dict(seg, j) for seg, j in rows],
+            "segments": [_segment_dict(seg, j, s) for seg, j, s in rows],
         }
 
     lines: list[str] = []
@@ -261,7 +279,7 @@ def _export_payload(
         lines.append(f"# {title}")
         if not public:  # the external meeting id correlates to the real call — owner export only
             lines.append(f"_{meeting.platform.value} · {meeting.external_meeting_id}_\n")
-    for seg, joined_at in rows:
+    for seg, joined_at, _src in rows:
         pre = stamp(seg, joined_at)
         spk = seg.speaker_id if seg.speaker_id and seg.speaker_id != "mixed" else ""
         head = f"{pre}{spk + ': ' if spk else ''}"
@@ -306,16 +324,18 @@ async def get_transcript(
     request: Request,
     after: int = 0,
     limit: int = 500,
+    source: str | None = None,  # tab | mic | upload; absent = all sources
     user: User = Depends(require_user),
 ) -> list[dict]:
+    src = _parse_source(source)
     async with request.app.state.session_factory() as db:
         meeting = await repo.get_meeting(db, meeting_id)
         if meeting is None or not _authorized(meeting, user):
             raise HTTPException(status_code=404, detail="not found")  # 404 — don't leak existence
         segments = await repo.transcript_for_meeting(
-            db, meeting_id, after_seq=after, limit=min(max(limit, 1), 1000)
+            db, meeting_id, after_seq=after, limit=min(max(limit, 1), 1000), source=src
         )
-        return [_segment_dict(seg, joined_at) for seg, joined_at in segments]
+        return [_segment_dict(seg, joined_at, s) for seg, joined_at, s in segments]
 
 
 class TranslationConfigBody(BaseModel):

@@ -42,7 +42,7 @@ async def shared_transcript(
         segments = await repo.transcript_for_meeting(
             db, meeting.id, after_seq=after, limit=min(max(limit, 1), 1000)
         )
-        return [_segment_dict(seg, joined_at) for seg, joined_at in segments]
+        return [_segment_dict(seg, joined_at, s) for seg, joined_at, s in segments]
 
 
 @router.get("/{token}/export")

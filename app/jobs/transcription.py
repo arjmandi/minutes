@@ -18,7 +18,13 @@ from app.config import DEV_ENVS, Settings, get_settings, soniox_file_base
 from app.crypto import decrypt
 from app.db import repo
 from app.db.base import make_engine, make_session_factory
-from app.db.models import JobStatus, SessionStatus, TranscriptionJob, TranslationStatus
+from app.db.models import (
+    CaptureSource,
+    JobStatus,
+    SessionStatus,
+    TranscriptionJob,
+    TranslationStatus,
+)
 from app.logging import configure_logging, get_logger
 from app.storage.factory import make_storage
 from app.transcribe.file_factory import make_file_transcriber
@@ -92,7 +98,11 @@ async def process_job(
                 log.info("transcription.canceled_midflight", job_id=str(job.id))
                 return
             session = await repo.create_session(
-                db, meeting_id=job.meeting_id, platform_call_id=f"upload:{job.id}", run_id=run_id
+                db,
+                meeting_id=job.meeting_id,
+                platform_call_id=f"upload:{job.id}",
+                run_id=run_id,
+                source=CaptureSource.upload,
             )
             session_id = session.id
             await db.commit()
