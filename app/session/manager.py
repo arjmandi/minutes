@@ -101,7 +101,12 @@ class SessionManager:
     async def run(self, adapter: ClientCaptureAdapter) -> CallSummary:
         meeting_id: uuid.UUID | None = None
         session_id: uuid.UUID | None = None
-        audio_q: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=_AUDIO_QUEUE_MAX)
+        # Each item carries the frame's real start time (s) so we can correct timestamps when the
+        # client drops silence (silence-suspend): Soniox times tokens against the audio it RECEIVED,
+        # so dropped silence would compress segment times. We track the offset against CONSUMED
+        # audio (in audio_gen, not at enqueue — the queue holds ~25s) and add it back per segment.
+        audio_q: asyncio.Queue[tuple[bytes, float] | None] = asyncio.Queue(maxsize=_AUDIO_QUEUE_MAX)
+        audio_state = {"sent_s": 0.0, "offset_ms": 0}  # offset = real elapsed − audio sent to STT
         translation_q: asyncio.Queue = asyncio.Queue(maxsize=_TRANSLATION_QUEUE_MAX)
         fanout_q: asyncio.Queue = asyncio.Queue(maxsize=_FANOUT_QUEUE_MAX)
         chunk_q: asyncio.Queue = asyncio.Queue(maxsize=_CHUNK_QUEUE_MAX)
@@ -123,7 +128,14 @@ class SessionManager:
                 item = await audio_q.get()
                 if item is None:
                     return
-                yield item
+                pcm, real_s = item
+                # Offset for THIS frame = its real start − audio already consumed. Without dropped
+                # silence the two track (offset≈0); each dropped gap bumps it. Constant within a
+                # segment (silence is the segment boundary), so reading it at finalize is exact.
+                drift = real_s * 1000 - audio_state["sent_s"] * 1000
+                audio_state["offset_ms"] = max(0, round(drift))
+                audio_state["sent_s"] += len(pcm) / BYTES_PER_SECOND
+                yield pcm
 
         def enqueue_fanout(event: dict) -> None:
             # Off the STT hot path: drop on a full queue rather than ever block transcription.
@@ -171,6 +183,11 @@ class SessionManager:
                             {"kind": "interim", "text": event.text, "source": session_source}
                         )
                         continue  # interim is live-only, not persisted
+                    # Add back the silence dropped before this segment so timestamps track real
+                    # meeting time (no-op when nothing was dropped — offset stays 0).
+                    off = audio_state["offset_ms"]
+                    seg_start = event.start_ms + off if event.start_ms is not None else None
+                    seg_end = event.end_ms + off if event.end_ms is not None else None
                     try:
                         async with self._session_factory() as db:
                             seg_id = await repo.upsert_segment(
@@ -181,8 +198,8 @@ class SessionManager:
                                 utterance_id=event.utterance_id,
                                 text=event.text,
                                 language=event.language,
-                                start_ms=event.start_ms,
-                                end_ms=event.end_ms,
+                                start_ms=seg_start,
+                                end_ms=seg_end,
                             )
                             await db.commit()
                         count += 1
@@ -205,8 +222,8 @@ class SessionManager:
                             "language": event.language,
                             "speaker": MIXED,
                             "source": session_source,
-                            "start_ms": event.start_ms,
-                            "end_ms": event.end_ms,
+                            "start_ms": seg_start,
+                            "end_ms": seg_end,
                         }
                     )
             finally:
@@ -321,12 +338,12 @@ class SessionManager:
                 except Exception:  # noqa: BLE001 — best-effort teardown
                     pass
 
-        async def put_audio(pcm: bytes) -> bool:
+        async def put_audio(pcm: bytes, real_s: float) -> bool:
             while True:
                 if persist_task is not None and persist_task.done():
                     return False
                 try:
-                    await asyncio.wait_for(audio_q.put(pcm), timeout=_PUT_TIMEOUT_S)
+                    await asyncio.wait_for(audio_q.put((pcm, real_s)), timeout=_PUT_TIMEOUT_S)
                     return True
                 except TimeoutError:
                     continue
@@ -372,7 +389,7 @@ class SessionManager:
                     control_task = asyncio.create_task(control_subscriber(event.call_id))
                     log.info("session.started", session_id=str(session_id), call_id=event.call_id)
                 elif isinstance(event, AudioFrame):
-                    if not await put_audio(event.pcm):
+                    if not await put_audio(event.pcm, event.timestamp):
                         break  # consumer died -> stop; finally will finalize
                     try:
                         chunk_q.put_nowait(event.pcm)  # tee to the archive (drop-on-full)

@@ -53,15 +53,22 @@ function rmsDb(int16) {
   return rms > 0 ? Math.round(20 * Math.log10(rms)) : -99;
 }
 
-function encodeFrame(seqNo, tsMs, int16) {
+function encodeFrame(seqNo, tsMs, int16, gap) {
   const buf = new ArrayBuffer(13 + int16.byteLength);
   const dv = new DataView(buf);
   dv.setUint32(0, seqNo >>> 0, true);
   dv.setBigUint64(4, BigInt(Math.trunc(tsMs)), true);
-  dv.setUint8(12, 0); // flags: bit0 = gap (unused for now)
+  dv.setUint8(12, gap ? 1 : 0); // flags: bit0 = gap-before-this-frame (silence-suspend resume)
   new Uint8Array(buf, 13).set(new Uint8Array(int16.buffer, int16.byteOffset, int16.byteLength));
   return buf;
 }
+
+// Silence-suspend (Host mic only): stop streaming during sustained silence to cut Soniox billing.
+// The backend re-adds the dropped time to segment timestamps via the real ts_ms each frame carries.
+const SILENCE_DB = -50;        // below this (dBFS) a 100 ms frame counts as silence
+const HANGOVER_FRAMES = 25;    // keep streaming 2.5 s into silence before suspending (don't clip tails)
+const PREROLL_FRAMES = 4;      // 400 ms of lead-in replayed on resume so word onsets aren't clipped
+const KEEPALIVE_FRAMES = 50;   // while suspended, send one frame every 5 s to keep the WS + STT warm
 
 class Capture {
   constructor(source) {
@@ -81,11 +88,34 @@ class Capture {
     this.failDetail = null; // set on an error termination -> kept in `failed` for the popup
     this.live = true; // present-in-map + not torn down
     this.status = "starting…";
+    // silence-suspend state (Host mic only; set in start())
+    this.silenceOn = false;
+    this.suspended = false;
+    this.silentRun = 0;
+    this.preroll = [];
     failed.delete(source); // a fresh start clears any prior error chip for this source
+  }
+
+  // Send one PCM frame to the backend (counts toward the live frame total / status).
+  _send(int16, tsMs, gap) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(encodeFrame(this.seq++, tsMs, int16, gap));
+    this.frames++;
+    if (this.frames - this.lastReport >= 10) {
+      this.lastReport = this.frames;
+      this.lastDb = rmsDb(int16);
+      this.status = "capturing · " + this.frames + " frames · " + this.lastDb + " dBFS";
+      publishStatus();
+    }
   }
 
   async start(spec) {
     await ensureCtx();
+    // Silence-suspend applies to the Host mic only (the Online stream is continuous content).
+    if (this.source === "mic") {
+      try { this.silenceOn = (await chrome.storage.local.get("silenceSuspend")).silenceSuspend !== false; }
+      catch { this.silenceOn = true; }
+    }
     try {
       if (this.source === "tab") {
         this.stream = await navigator.mediaDevices.getUserMedia({
@@ -162,15 +192,39 @@ class Capture {
     this.node.port.onmessage = (e) => {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
       const int16 = e.data; // Int16Array, 1600 samples (100 ms @ 16 kHz)
-      const tsMs = this.total / 16; // 16 samples per ms at 16 kHz
+      const tsMs = this.total / 16; // 16 samples per ms at 16 kHz — REAL elapsed time (counts silence)
       this.total += int16.length;
-      this.ws.send(encodeFrame(this.seq++, tsMs, int16));
-      this.frames++;
-      if (this.frames - this.lastReport >= 10) {
-        this.lastReport = this.frames;
-        this.lastDb = rmsDb(int16);
-        this.status = "capturing · " + this.frames + " frames · " + this.lastDb + " dBFS";
-        publishStatus();
+
+      if (!this.silenceOn) { this._send(int16, tsMs, false); return; }
+
+      // Silence-suspend: don't stream sustained silence; resume (with a short pre-roll) on speech.
+      const loud = rmsDb(int16) >= SILENCE_DB;
+      if (loud) {
+        if (this.suspended) {
+          let first = true; // the first frame after a gap carries the gap flag
+          for (const f of this.preroll) { this._send(f.int16, f.tsMs, first); first = false; }
+          this.suspended = false;
+          this.preroll = [];
+          this._send(int16, tsMs, first);
+        } else {
+          this._send(int16, tsMs, false);
+        }
+        this.silentRun = 0;
+      } else {
+        this.silentRun++;
+        if (this.suspended) {
+          this.preroll.push({ tsMs, int16 });
+          if (this.preroll.length > PREROLL_FRAMES) this.preroll.shift();
+          // Periodic keepalive so the WS + STT connection stay warm through long silences.
+          if (this.silentRun % KEEPALIVE_FRAMES === 0) this._send(int16, tsMs, true);
+        } else if (this.silentRun > HANGOVER_FRAMES) {
+          this.suspended = true;
+          this.preroll = [{ tsMs, int16 }];
+          this.status = "suspended (silence) · " + this.frames + " frames";
+          publishStatus();
+        } else {
+          this._send(int16, tsMs, false); // hangover — keep streaming briefly into the pause
+        }
       }
     };
   }
