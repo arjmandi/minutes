@@ -200,13 +200,19 @@ async def disable_share(
         return _meeting_dict(await repo.get_meeting(db, meeting_id))
 
 
-def _validate_export_params(fmt: str, include: str) -> None:
+def _validate_export_params(fmt: str, include: str, source: str | None = None) -> None:
     if fmt not in ("txt", "md", "json"):
         raise HTTPException(status_code=422, detail="format must be txt, md or json")
     if include not in ("transcript", "translation", "both"):
         raise HTTPException(
             status_code=422, detail="include must be transcript, translation or both"
         )
+    # 'both' = all sources, rendered as labeled sections; tab|mic = one source; None = all.
+    if source not in (None, "tab", "mic", "upload", "both"):
+        raise HTTPException(status_code=422, detail="invalid source")
+
+
+_SOURCE_LABEL = {"tab": "Online stream", "mic": "Host mic", "upload": "Upload"}
 
 
 def _export_response(meeting: Meeting, payload, fmt: str, *, public: bool = False):
@@ -224,12 +230,16 @@ def _export_response(meeting: Meeting, payload, fmt: str, *, public: bool = Fals
     return PlainTextResponse(payload, headers=disp, media_type=media)
 
 
-async def _all_segments(db, meeting_id: uuid.UUID) -> list[tuple]:
+async def _all_segments(
+    db, meeting_id: uuid.UUID, *, source: CaptureSource | None = None
+) -> list[tuple]:
     """Page the full transcript (export needs every segment, not just the first page)."""
     out: list[tuple] = []
     after = 0
     while True:
-        batch = await repo.transcript_for_meeting(db, meeting_id, after_seq=after, limit=1000)
+        batch = await repo.transcript_for_meeting(
+            db, meeting_id, after_seq=after, limit=1000, source=source
+        )
         if not batch:
             break
         out.extend(batch)
@@ -279,19 +289,39 @@ def _export_payload(
         lines.append(f"# {title}")
         if not public:  # the external meeting id correlates to the real call — owner export only
             lines.append(f"_{meeting.platform.value} · {meeting.external_meeting_id}_\n")
-    for seg, joined_at, _src in rows:
+
+    def render_row(seg, joined_at) -> None:
         pre = stamp(seg, joined_at)
         spk = seg.speaker_id if seg.speaker_id and seg.speaker_id != "mixed" else ""
         head = f"{pre}{spk + ': ' if spk else ''}"
         if include == "transcript":
             lines.append(f"{head}{seg.text}")
         elif include == "translation":
-            lines.append(f"{head}{translation_of(seg)}")
+            tr = translation_of(seg)
+            if tr:  # skip lines with nothing to show on the translation side
+                lines.append(f"{head}{tr}")
         else:  # both: source line, translation indented beneath it
             lines.append(f"{head}{seg.text}")
             tr = translation_of(seg)
             if tr:
                 lines.append(f"{' ' * len(head)}{tr}")
+
+    # Distinct sources present, in encounter order. With >1 source, render labeled sections
+    # ("Online stream" / "Host mic"), sharing the global epoch so timestamps line up.
+    present: list = []
+    for _seg, _j, s in rows:
+        if s not in present:
+            present.append(s)
+    if len(present) > 1:
+        for src in present:
+            label = _SOURCE_LABEL.get(src.value, src.value)
+            lines.append(f"\n## {label}" if fmt == "md" else f"\n=== {label} ===")
+            for seg, joined_at, s in rows:
+                if s == src:
+                    render_row(seg, joined_at)
+    else:
+        for seg, joined_at, _s in rows:
+            render_row(seg, joined_at)
     return "\n".join(lines)
 
 
@@ -303,15 +333,17 @@ async def export_meeting(
     include: str = "both",
     timestamps: bool = True,
     lang: str | None = None,
+    source: str | None = None,  # tab | mic | both | absent(=all -> labeled sections)
     user: User = Depends(require_user),
 ):
-    """Export a meeting (owner-or-admin); see query params for format + included content."""
-    _validate_export_params(format, include)
+    """Export a meeting (owner-or-admin): query params set format, included content, and source."""
+    _validate_export_params(format, include, source)
+    src_filter = None if source in (None, "both") else _parse_source(source)
     async with request.app.state.session_factory() as db:
         meeting = await repo.get_meeting(db, meeting_id)
         if meeting is None or not _authorized(meeting, user):
             raise HTTPException(status_code=404, detail="not found")
-        rows = await _all_segments(db, meeting_id)
+        rows = await _all_segments(db, meeting_id, source=src_filter)
         payload = _export_payload(
             meeting, rows, fmt=format, include=include, timestamps=timestamps, lang=lang
         )
@@ -394,7 +426,7 @@ async def translate_segment(
         found = await repo.get_segment_for_translation(db, segment_id)
         if found is None or found[1].id != meeting_id or not _authorized(found[1], user):
             raise HTTPException(status_code=404, detail="not found")
-        segment, meeting = found
+        segment, meeting, seg_source = found
         target = target_language or meeting.translation_output_language
         if not target:
             raise HTTPException(status_code=422, detail="no target language configured")
@@ -435,6 +467,7 @@ async def translate_segment(
             "target": target,
             "text": text,
             "status": status.value,
+            "source": seg_source.value,
         },
     )
     return {"target_language": target, "text": text, "status": status.value}

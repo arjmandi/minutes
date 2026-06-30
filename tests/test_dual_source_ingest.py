@@ -91,6 +91,20 @@ def test_tab_and_mic_capture_tag_the_transcript():
 
         assert c.get(f"/api/meetings/{mid}/transcript?source=bogus").status_code == 422
 
+        # export: both -> two labeled sections; a single source -> no section header.
+        both_txt = c.get(
+            f"/api/meetings/{mid}/export?format=txt&source=both&include=transcript"
+        ).text
+        assert "=== Online stream ===" in both_txt and "=== Host mic ===" in both_txt
+        mic_txt = c.get(
+            f"/api/meetings/{mid}/export?format=txt&source=mic&include=transcript"
+        ).text
+        assert "===" not in mic_txt  # single source: flat, no section headers
+        assert c.get(f"/api/meetings/{mid}/export?source=bogus").status_code == 422
+        # json carries the source per segment regardless of source filter.
+        js = c.get(f"/api/meetings/{mid}/export?format=json").json()
+        assert {s["source"] for s in js["segments"]} == {"tab", "mic"}
+
 
 def test_owner_binding_rejects_other_principal():
     with TestClient(app) as c:

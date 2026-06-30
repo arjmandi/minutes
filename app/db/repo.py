@@ -386,17 +386,19 @@ async def cancel_job(db: AsyncSession, *, job_id: uuid.UUID) -> bool:
 
 async def get_segment_for_translation(
     db: AsyncSession, segment_id: uuid.UUID
-) -> tuple[TranscriptSegment, Meeting] | None:
-    """Load a final segment + its owning meeting (for on-demand translate + ownership check)."""
+) -> tuple[TranscriptSegment, Meeting, CaptureSource] | None:
+    """Load a final segment + its owning meeting + its capture source (for on-demand translate +
+    ownership check). The source lets the live translation fan-out carry it so a source-filtered
+    web view updates the right column."""
     row = (
         await db.execute(
-            select(TranscriptSegment, Meeting)
+            select(TranscriptSegment, Meeting, Session.source)
             .join(Session, TranscriptSegment.session_id == Session.id)
             .join(Meeting, Session.meeting_id == Meeting.id)
             .where(TranscriptSegment.id == segment_id)
         )
     ).first()
-    return (row[0], row[1]) if row is not None else None
+    return (row[0], row[1], row[2]) if row is not None else None
 
 
 # --- audio archival (two-phase write, spec v3 §9) ---

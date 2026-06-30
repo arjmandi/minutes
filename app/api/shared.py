@@ -13,6 +13,7 @@ from app.api.meetings import (
     _all_segments,
     _export_payload,
     _export_response,
+    _parse_source,
     _segment_dict,
     _validate_export_params,
     public_meeting_dict,
@@ -53,14 +54,16 @@ async def shared_export(
     include: str = "both",
     timestamps: bool = True,
     lang: str | None = None,
+    source: str | None = None,  # tab | mic | both | absent(=all -> labeled sections)
 ):
-    """Public export of a shared meeting; see query params for format + included content."""
-    _validate_export_params(format, include)
+    """Public export of a shared meeting: query params set format, content, and source."""
+    _validate_export_params(format, include, source)
+    src_filter = None if source in (None, "both") else _parse_source(source)
     async with request.app.state.session_factory() as db:
         meeting = await repo.get_meeting_by_share_token(db, token)
         if meeting is None:
             raise HTTPException(status_code=404, detail="not found")
-        rows = await _all_segments(db, meeting.id)
+        rows = await _all_segments(db, meeting.id, source=src_filter)
         payload = _export_payload(
             meeting, rows, fmt=format, include=include, timestamps=timestamps, lang=lang,
             public=True,
