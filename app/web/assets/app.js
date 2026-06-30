@@ -155,11 +155,11 @@ function renderApp() {
     <div class="m-body">
       <div class="m-col m-col--nav">
         <div class="m-col__head"><span class="m-col__title">Transcriptions</span>
-          <div style="display:flex;gap:6px;align-items:center">
-            <button class="fs-btn fs-btn--sm fs-btn--ghost fs-btn--icon" id="reloadbtn" title="Reload transcriptions" aria-label="Reload transcriptions"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg></button>
-            <button class="fs-btn fs-btn--sm fs-btn--primary" id="recordbtn" title="Record with your microphone"><span style="display:inline-flex;align-items:center;gap:6px"><span style="width:9px;height:9px;border-radius:50%;background:currentColor"></span>Record</span></button>
-            <button class="fs-btn fs-btn--sm fs-btn--ghost" id="uploadbtn" title="Upload audio">↑ Upload</button>
-          </div>
+          <button class="fs-btn fs-btn--sm fs-btn--ghost fs-btn--icon" id="reloadbtn" title="Reload transcriptions" aria-label="Reload transcriptions"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg></button>
+        </div>
+        <div class="entry-split" style="padding:10px 12px 6px">
+          <button class="fs-btn fs-btn--sm fs-btn--primary" id="recordbtn" title="Record with your microphone"><span style="display:inline-flex;align-items:center;justify-content:center;gap:7px"><span style="width:9px;height:9px;border-radius:50%;background:currentColor"></span>Record</span></button>
+          <button class="fs-btn fs-btn--sm fs-btn--ghost" id="uploadbtn" title="Upload audio">↑ Upload</button>
         </div>
         <div class="m-col__scroll" id="meetinglist"></div>
         <input type="file" id="fileinput" accept="audio/*,video/*" style="display:none" />
@@ -1201,7 +1201,10 @@ function mConnectLive(meetingId, attempt = 0) {
       if (mSeenSources().length !== before) {
         // Follow the first source that appears if the current selection produced nothing (mic-only).
         if (!mSeenSources().includes(mSource)) mSource = mSeenSources()[0] || "tab";
-        renderMobileDetail(); // reveal a new source chip
+        // Re-render only to reveal the source-chip row when a SECOND source appears (single-source
+        // has no chips). NEVER during a recording — that full-screen view owns its layout, and a
+        // re-render here would drop the deck + Stop while the recorder keeps running.
+        if (mView === "detail" && mSeenSources().length > 1) renderMobileDetail();
       }
       mRenderStream();
     } else if (ev.kind === "translation") {
