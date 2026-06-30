@@ -1,8 +1,8 @@
 // minutes — service worker (root scope). Precaches the app shell for offline launch + fast loads.
 // CRITICAL: never intercept /ingest (the capture WebSocket) or /api/* (REST + live WS) — those must
-// always hit the network. Navigations are network-first (fresh app), assets cache-first.
-// Bump CACHE on every deploy so clients pick up new assets on next launch.
-const CACHE = "minutes-shell-v1";
+// always hit the network. Navigations are network-first (fresh app); assets are
+// stale-while-revalidate so a deploy propagates on the next load WITHOUT needing a cache bump.
+const CACHE = "minutes-shell-v2";
 const SHELL = [
   "/app",
   "/assets/app.js",
@@ -49,16 +49,21 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Static assets: cache-first, then network (and cache the result).
+  // Static assets: stale-while-revalidate — serve the cache fast, refresh in the background so the
+  // next load picks up a deploy. (Assets share stable URLs, so plain cache-first would serve them
+  // stale forever after an update.)
   if (url.pathname.startsWith("/assets/")) {
     event.respondWith(
-      caches.match(req).then((hit) =>
-        hit || fetch(req).then((res) => {
-          const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
+      caches.match(req).then((hit) => {
+        const net = fetch(req).then((res) => {
+          if (res && res.ok) {
+            const copy = res.clone();
+            caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
+          }
           return res;
-        })
-      )
+        }).catch(() => hit);
+        return hit || net;
+      })
     );
   }
 });
