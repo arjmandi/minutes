@@ -32,6 +32,29 @@ def _token() -> str:
     )
 
 
+def _token_for(principal: str) -> str:
+    """A capability token bound to a specific principal (for the owner-binding ingest gate)."""
+    s = get_settings()
+    return issue_capability_token(
+        principal=principal, secret=s.auth_secret, algorithm=s.auth_algorithm,
+        ttl_s=60, meetings=["*"],
+    )
+
+
+def _user_id(email: str) -> str:
+    async def _run() -> str:
+        engine = make_engine(get_settings().database_url)
+        factory = make_session_factory(engine)
+        try:
+            async with factory() as db:
+                user = await repo.get_user_by_email(db, email)
+                return str(user.id)
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_run())
+
+
 def _make_user(email: str, *, admin: bool) -> None:
     async def _run() -> None:
         engine = make_engine(get_settings().database_url)
@@ -115,8 +138,10 @@ def test_consent_gate_blocks_then_allows():
         )
         assert granted.status_code == 200
         assert granted.json()["consent_status"] == "granted"
-        # Now admitted.
-        with client.websocket_connect(f"/ingest?token={_token()}") as ws:
+        # Now admitted — capture must be by the meeting OWNER (granting consent claimed it), so use
+        # a token bound to that user's principal (the owner-binding ingest gate rejects others).
+        owner_token = _token_for(_user_id(email))
+        with client.websocket_connect(f"/ingest?token={owner_token}") as ws:
             ws.send_json(_hello(ext, "c2"))
             assert ws.receive_json()["type"] == "admitted"
 
