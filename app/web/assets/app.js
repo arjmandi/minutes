@@ -291,17 +291,43 @@ function applySourceFilter() {
   if (ls) ls.textContent = multi ? ` · ${SRC_LABEL[selectedSource] || selectedSource}` : "";
 }
 
+// ---- copy transcript / translation (no timestamps; only the source you're viewing) ----
+function copyToClipboard(text, okMsg) {
+  if (!text || !text.trim()) { toast("Nothing to copy yet", "info"); return; }
+  if (!navigator.clipboard) { toast("Copy isn't available here", "error"); return; }
+  navigator.clipboard.writeText(text).then(() => toast(okMsg || "Copied")).catch(() => toast("Copy failed", "error"));
+}
+// Desktop: collect the selected-source line text from a column (#transcript | #translation), stripping
+// the language badge and skipping untranslated placeholder rows. No timestamps. The DOM is the source
+// of truth (live translations land there), so this stays correct for every meeting type.
+function collectColumnText(colId) {
+  const sel = seenSources.size > 1 ? selectedSource : null; // null on single-source -> take all
+  return [...root.querySelectorAll(`${colId} .m-line[data-seg]`)]
+    .filter((el) => !sel || el.dataset.source === sel)
+    .map((el) => {
+      const t = el.querySelector(".m-line__text");
+      if (!t) return ""; // translation placeholders (translate / failed / already) have no __text
+      const c = t.cloneNode(true);
+      c.querySelectorAll(".m-line__lang").forEach((x) => x.remove());
+      return c.textContent.trim();
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
 function renderMidHead(m) {
   const head = root.querySelector("#midhead");
   head.innerHTML = `
     <span class="m-col__title" id="mtitle" title="Click to rename" style="cursor:text">${esc(m.title || m.external_meeting_id)}</span>
     <span id="srcbar"></span>
     <div style="display:flex;gap:6px;align-items:center;margin-left:auto">
+      <button class="fs-btn fs-btn--sm fs-btn--ghost fs-btn--icon" id="copytx" title="Copy transcript (no timestamps)">${COPY_ICON}</button>
       <button class="fs-btn fs-btn--sm fs-btn--ghost" id="exportbtn">Export</button>
       <button class="fs-btn fs-btn--sm fs-btn--ghost" id="sharebtn">Share</button>
       <button class="fs-btn fs-btn--sm fs-btn--ghost fs-btn--icon" id="delbtn" title="Delete">🗑</button>
     </div>`;
   head.querySelector("#mtitle").onclick = () => beginRename(m);
+  head.querySelector("#copytx").onclick = () => copyToClipboard(collectColumnText("#transcript"), "Transcript copied");
   head.querySelector("#exportbtn").onclick = () => openExportDialog(m);
   head.querySelector("#sharebtn").onclick = () => toggleSharePanel(m);
   head.querySelector("#delbtn").onclick = () => deleteMeeting(m);
@@ -421,7 +447,11 @@ function renderTlHead(m) {
   const head = root.querySelector("#tlhead");
   const lang = m.translation?.output_language;
   head.innerHTML = `<span class="m-col__title">Translation<span id="tlsrc" style="color:var(--fs-ink-muted);font-weight:400"></span>${m.translation?.enabled && lang ? " → " + esc(lang) : ""}</span>
-    <button class="fs-btn fs-btn--sm fs-btn--ghost fs-btn--icon" id="tlcfg" title="Translation settings">⚙</button>`;
+    <span style="display:flex;gap:6px;align-items:center;margin-left:auto">
+      <button class="fs-btn fs-btn--sm fs-btn--ghost fs-btn--icon" id="copytl" title="Copy translation (no timestamps)">${COPY_ICON}</button>
+      <button class="fs-btn fs-btn--sm fs-btn--ghost fs-btn--icon" id="tlcfg" title="Translation settings">⚙</button>
+    </span>`;
+  head.querySelector("#copytl").onclick = () => copyToClipboard(collectColumnText("#translation"), "Translation copied");
   head.querySelector("#tlcfg").onclick = () => toggleTlConfig(m);
   applySourceFilter(); // populate the #tlsrc source caption for the current selection
 }
@@ -1107,6 +1137,7 @@ function renderMobileDetail() {
       <div class="mdhead__top">
         <button class="mdback" id="mback">${M_BACK}</button>
         <div class="mdhead__title"><b>${esc(m.title || m.external_meeting_id)}</b><span><span class="m-dot m-dot--idle"></span>${esc(m.platform)}</span></div>
+        <button class="icon-btn" id="mcopy" aria-label="Copy ${mSeg === "tl" ? "translation" : "transcript"}">${COPY_ICON}</button>
         <button class="icon-btn" id="mdmore" aria-label="${mSeg === "tl" ? "Translation settings" : "More"}">${mSeg === "tl" ? M_GEAR : M_MORE}</button>
       </div>
       ${mSeenSources().length > 1 ? `<div class="msrc">
@@ -1124,7 +1155,25 @@ function renderMobileDetail() {
   root.querySelector("#segtx").onclick = () => { mSeg = "tx"; renderMobileDetail(); mRenderStream(); };
   root.querySelector("#segtl").onclick = () => { mSeg = "tl"; renderMobileDetail(); mRenderStream(); };
   root.querySelectorAll("[data-msrc]").forEach((b) => (b.onclick = () => { mSource = b.dataset.msrc; renderMobileDetail(); mRenderStream(); }));
+  root.querySelector("#mcopy").onclick = mCopyCurrent;
   root.querySelector("#mdmore").onclick = () => (mSeg === "tl" ? mTranslationSheet(m) : mActionsSheet(m));
+}
+
+// Copy what you're viewing on mobile: the current source's transcript, or its translation. No timestamps.
+function mCopyCurrent() {
+  const multi = mSeenSources().length > 1;
+  const segs = multi ? mSegs.filter((s) => (s.source || "tab") === mSource) : mSegs;
+  let lines;
+  if (mSeg === "tl") {
+    const out = meetings.find((x) => x.id === selId)?.translation?.output_language;
+    lines = segs.map((s) => {
+      const t = (s.translations || []).find((x) => x.text && (!out || x.target_language === out));
+      return t && t.status !== "failed" ? (t.text || "") : "";
+    });
+  } else {
+    lines = segs.map((s) => s.text || "");
+  }
+  copyToClipboard(lines.filter((l) => l && l.trim()).join("\n"), mSeg === "tl" ? "Translation copied" : "Transcript copied");
 }
 
 function mLine(s) {

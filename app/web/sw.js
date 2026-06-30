@@ -2,7 +2,7 @@
 // CRITICAL: never intercept /ingest (the capture WebSocket) or /api/* (REST + live WS) — those must
 // always hit the network. Navigations are network-first (fresh app); assets are
 // stale-while-revalidate so a deploy propagates on the next load WITHOUT needing a cache bump.
-const CACHE = "minutes-shell-v2";
+const CACHE = "minutes-shell-v3";
 const SHELL = [
   "/app",
   "/assets/app.js",
