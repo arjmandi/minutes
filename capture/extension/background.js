@@ -108,6 +108,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           .sendMessage({ target: "offscreen", type: "stop" })
           .catch(() => {});
         sendResponse({ ok: true });
+      } else if (msg.type === "capture-status") {
+        // Direct push from the offscreen on every status change -> drive the toolbar icon. More
+        // reliable than waiting on storage.onChanged to wake this worker.
+        setIconState(pickIcon(msg.sources));
+        sendResponse({ ok: true });
       } else if (msg.type === "capture-state") {
         // Authoritative liveness for the popup: the offscreen doc exists iff a capture is alive.
         const active = !!(await chrome.offscreen.hasDocument?.());

@@ -38,6 +38,9 @@ function publishStatus() {
   try {
     chrome.storage.local.set({ minutesCapture: { sources, at: Date.now() } });
   } catch {}
+  // Direct push to the background (toolbar icon) + popup (chips). storage.onChanged alone proved
+  // unreliable to wake/deliver promptly, so this message is the authoritative live-update path.
+  try { chrome.runtime.sendMessage({ type: "capture-status", sources }).catch(() => {}); } catch {}
 }
 
 function rmsDb(int16) {

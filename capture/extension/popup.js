@@ -224,12 +224,14 @@ function renderCapture(st) {
     const showTab = !!tabObj || capTab;
     const showMic = !!micObj || capMic;
     // Mic-only captures (a blank/non-capturable tab) get a mic context instead of the meeting card.
+    const devLabel = st.micDeviceLabel ? esc(st.micDeviceLabel) : "";
     const recCtx = (showTab || (!showMic && meeting.platform))
       ? `<div class="ctx"><img src="${esc(meeting.iconUrl || "brand/icon-web.svg")}" alt="" width="30" height="30" /><div style="flex:1;min-width:0"><div class="ctx__name" title="${esc(meeting.name || "Recording")}">${esc(meeting.name || "Recording")}</div><div class="ctx__id">${esc(meeting.sub || "")}</div></div><span class="src-mark src-mark--online" title="Online stream"></span></div>`
-      : `<div class="ctx"><div style="width:30px;height:30px;display:grid;place-items:center;font-size:20px">🎙</div><div style="flex:1;min-width:0"><div class="ctx__name">Mic recording</div><div class="ctx__id">Host mic only</div></div><span class="src-mark src-mark--mic" title="Host mic"></span></div>`;
-    const chip = (kind, name, obj) => {
+      : `<div class="ctx"><div style="width:30px;height:30px;display:grid;place-items:center;font-size:20px">🎙</div><div style="flex:1;min-width:0"><div class="ctx__name">Mic recording</div><div class="ctx__id">${devLabel || "Host mic only"}</div></div><span class="src-mark src-mark--mic" title="Host mic"></span></div>`;
+    const chip = (kind, name, obj, prefix) => {
       const state = obj?.error ? "error" : (obj?.capturing ? "live" : "starting");
-      const meta = state === "live" ? `${(obj.frames || 0).toLocaleString()} frames`
+      const frames = `${(obj?.frames || 0).toLocaleString()} frames`;
+      const meta = state === "live" ? (prefix ? `${prefix} · ${frames}` : frames)
         : state === "error" ? (obj.status || "Transcription stopped.")
           : "";
       return srcChipHtml(kind, name, meta, state);
@@ -249,7 +251,7 @@ function renderCapture(st) {
       <div class="rec"><div class="rec__label"><span class="dot"></span>${header}</div></div>
       <div class="srcchips">
         ${showTab ? chip("online", "Online stream", tabObj) : ""}
-        ${showMic ? chip("mic", "Host mic", micObj) : ""}
+        ${showMic ? chip("mic", "Host mic", micObj, devLabel) : ""}
       </div>
       <button class="btn lg stop" id="stop" style="margin-top:auto">■ ${totalShown > 1 ? "Stop both" : "Stop"}</button>
       <div class="cap-note">${note}</div>`;
@@ -293,7 +295,9 @@ function wireMicToggle(st) {
 }
 
 function openMicSetup() {
-  chrome.tabs.create({ url: chrome.runtime.getURL("permission.html") });
+  // Mic grant + device/level/echo/silence all live in the single settings page now. Opening it in a
+  // tab (open_in_tab) survives Chrome's mic-permission prompt stealing focus.
+  chrome.runtime.openOptionsPage();
 }
 
 async function start(opts = {}) {
@@ -365,7 +369,7 @@ async function start(opts = {}) {
     // so the authoritative hasDocument() reads false for ~1s. The grace bridges that; afterwards
     // hasDocument() rules (and reverts to idle only if the capture genuinely failed).
     enterGrace("rec");
-    const full = await chrome.storage.local.get(["backendBase", "deviceEmail", "minutesCapture"]);
+    const full = await chrome.storage.local.get(["backendBase", "deviceEmail", "minutesCapture", "micDeviceLabel"]);
     full.__active = true;
     renderCapture(full);
   } catch (e) {
@@ -425,7 +429,9 @@ async function reconcile() {
   }
 }
 
-// The offscreen's per-second status write nudges the frame counter; the poll owns state transitions.
+// Three nudges to converge the popup, belt-and-suspenders: the offscreen's direct status push
+// (most reliable), the storage write it also makes, and a slow poll as a backstop.
+chrome.runtime.onMessage.addListener((msg) => { if (msg?.type === "capture-status") reconcile(); });
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes.minutesCapture) reconcile();
 });

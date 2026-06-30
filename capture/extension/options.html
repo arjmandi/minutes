@@ -6,31 +6,58 @@
 <style>
   :root {
     --ink: #1b1a17; --paper: #f4f2ec; --bg: #faf8f2; --accent: #dd5a1a; --muted: #97948a;
-    --border: #e3e0d8; --surface: #fff; --ink2: #5a5750;
+    --border: #e3e0d8; --surface: #fff; --surface2: #f4f2ec; --surface3: #efece4; --ink2: #5a5750;
     --ok: #2e7d52; --ok-bg: #e7f1ea; --warn: #9a6a00; --warn-bg: #f7efdc; --err: #c0392b; --err-bg: #f6e3e0;
+    --src-mic: #2563eb; --src-mic-soft: #e5edfd; --src-mic-ink: #1d4fbf;
   }
   * { box-sizing: border-box; }
   body { font: 14px "Space Grotesk", system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--ink); }
-  .wrap { max-width: 560px; margin: 0 auto; padding: 32px 24px; }
+  .wrap { max-width: 600px; margin: 0 auto; padding: 32px 24px 48px; }
   .hd { display: flex; align-items: center; gap: 10px; margin-bottom: 24px; }
   .hd .logo { width: 28px; height: 28px; border-radius: 7px; }
   .hd b { font-size: 18px; letter-spacing: -0.02em; }
   .hd span { font-size: 14px; color: var(--ink2); }
-  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 22px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 22px; margin-bottom: 18px; }
+  .card__title { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; }
+  .card__sub { font-size: 12px; color: var(--ink2); margin-bottom: 16px; line-height: 1.5; }
   label { display: block; font-weight: 600; font-size: 13px; margin-bottom: 6px; }
   .field { display: flex; gap: 8px; }
-  input { flex: 1; padding: 9px 11px; border: 1px solid var(--border); border-radius: 8px; font: inherit; font-family: "Geist Mono", ui-monospace, monospace; font-size: 13px; background: var(--surface); color: var(--ink); }
-  input:focus { outline: 2px solid color-mix(in srgb, var(--accent) 35%, transparent); border-color: var(--accent); }
+  input, select { flex: 1; width: 100%; padding: 9px 11px; border: 1px solid var(--border); border-radius: 8px; font: inherit; font-size: 13px; background: var(--surface); color: var(--ink); }
+  input.mono { font-family: "Geist Mono", ui-monospace, monospace; }
+  input:focus, select:focus { outline: 2px solid color-mix(in srgb, var(--accent) 35%, transparent); border-color: var(--accent); }
   button { font: inherit; font-weight: 600; border: 0; border-radius: 8px; padding: 9px 14px; cursor: pointer; }
+  button:disabled { opacity: .55; cursor: default; }
   .primary { background: var(--accent); color: #fff; }
   .ghost { background: var(--surface); color: var(--ink); border: 1px solid var(--border); }
+  .lg { padding: 11px 16px; font-size: 15px; width: 100%; }
   .hint { font-size: 12px; color: var(--muted); margin-top: 8px; line-height: 1.5; }
+  code { font-family: "Geist Mono", ui-monospace, monospace; font-size: .9em; background: var(--surface3); padding: 1px 5px; border-radius: 5px; }
   .chip { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 8px; font-size: 13px; font-weight: 500; margin-top: 14px; }
   .chip b { font-weight: 700; }
   .chip.ok { background: var(--ok-bg); color: var(--ok); }
   .chip.warn { background: var(--warn-bg); color: var(--warn); }
   .chip.err { background: var(--err-bg); color: var(--err); }
-  .foot { font-size: 12px; color: var(--muted); margin-top: 18px; line-height: 1.5; }
+  .foot { font-size: 12px; color: var(--muted); margin-top: 6px; line-height: 1.5; }
+  .src-mark { width: 10px; height: 10px; border-radius: 3px; display: inline-block; vertical-align: middle; }
+  .src-mark--mic { background: var(--src-mic); }
+  .ic { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; margin-bottom: 14px; background: var(--src-mic-soft); color: var(--src-mic); }
+  .ic--warn { background: var(--warn-bg); color: var(--warn); }
+  .row2 { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 16px 0; border-top: 1px solid var(--border); }
+  .row2__t { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 7px; }
+  .row2__d { font-size: 12px; color: var(--ink2); margin-top: 4px; max-width: 44ch; line-height: 1.5; }
+  .badge { font-family: "Geist Mono", ui-monospace, monospace; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 2px 6px; border-radius: 5px; background: var(--src-mic-soft); color: var(--src-mic-ink); }
+  .fs-switch { display: inline-flex; cursor: pointer; flex: none; margin-top: 2px; }
+  .fs-switch__track { width: 40px; height: 23px; border-radius: 999px; background: #cfccc4; position: relative; transition: background .16s ease; }
+  .fs-switch__thumb { position: absolute; top: 2px; left: 2px; width: 19px; height: 19px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: left .16s ease; }
+  .fs-switch.is-on .fs-switch__track { background: var(--accent); }
+  .fs-switch.is-on .fs-switch__thumb { left: 19px; }
+  .field2 { display: flex; flex-direction: column; gap: 7px; margin-bottom: 16px; }
+  .lvl-wrap { display: flex; flex-direction: column; gap: 7px; padding: 13px 14px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface2); }
+  .lvl { display: flex; align-items: flex-end; gap: 3px; height: 30px; padding: 0 2px; }
+  .lvl i { flex: 1; border-radius: 2px; background: var(--src-mic); height: 8%; opacity: .18; transition: height 70ms linear, opacity 70ms linear; }
+  .lvl i.is-on { opacity: 1; }
+  .lvl-wrap__cap { display: flex; align-items: center; justify-content: space-between; font-family: "Geist Mono", ui-monospace, monospace; font-size: 11px; color: var(--muted); }
+  .steps { border: 1px solid var(--border); border-radius: 9px; background: var(--surface2); padding: 12px 14px; margin: 12px 0; font-size: 13px; color: var(--ink2); line-height: 1.8; }
 </style>
 </head>
 <body>
@@ -39,17 +66,27 @@
       <svg class="logo" viewBox="0 0 64 64" fill="none"><rect width="64" height="64" rx="16" fill="#1B1A17"/><rect x="16" y="20" width="32" height="6" rx="3" fill="#DD5A1A"/><rect x="16" y="29" width="22" height="6" rx="3" fill="#F4F2EC"/><rect x="16" y="38" width="28" height="6" rx="3" fill="#97948A"/></svg>
       <b>minutes</b><span>· extension settings</span>
     </div>
+
     <div class="card">
+      <div class="card__title">Server</div>
+      <div class="card__sub">Point this at your own minutes instance. You sign in from the toolbar popup.</div>
       <label for="server">Server URL</label>
       <div class="field">
-        <input id="server" placeholder="https://minutes.your-company.com" />
-        <button class="ghost" id="test">Test connection</button>
+        <input id="server" class="mono" placeholder="https://minutes.your-company.com" />
+        <button class="ghost" id="test">Test</button>
         <button class="primary" id="save">Save</button>
       </div>
-      <div class="hint">Point this at your own minutes instance — a domain (https://…) or <code>http://IP:8000</code>. You sign in from the toolbar popup.</div>
+      <div class="hint">A domain (https://…) or <code>http://IP:8000</code>.</div>
       <div id="result"></div>
     </div>
-    <div class="foot">Audio is captured in the active tab and streamed only to the server above. Nothing is sent anywhere else.</div>
+
+    <div class="card">
+      <div class="card__title"><span class="src-mark src-mark--mic"></span>Host microphone</div>
+      <div class="card__sub">Capture your own voice as a separate “Host mic” track. Change these anytime — stop the recording, adjust, then start again.</div>
+      <div id="mic"></div>
+    </div>
+
+    <div class="foot">Audio is captured in the active tab (and your mic, if enabled) and streamed only to the server above. Nothing is sent anywhere else.</div>
   </div>
   <script src="options.js"></script>
 </body>
