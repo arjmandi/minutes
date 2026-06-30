@@ -59,19 +59,52 @@
   .empty__sub { font-size: 13px; color: var(--ink2); line-height: 1.5; max-width: 240px; }
   .signin-target { font-size: 13px; color: var(--ink2); }
   .signin-target b { color: var(--ink); font-family: "Geist Mono", ui-monospace, monospace; font-weight: 500; }
-  /* mic toggle + per-source chips (dual-source) */
+  /* ---- dual-source design primitives (ported from dual.css, mapped to popup tokens) ---- */
   button.btn.sm { width: auto; padding: 7px 12px; font-size: 12px; background: var(--surface); border: 1px solid var(--border); color: var(--ink); }
   .microw { display: flex; align-items: center; gap: 8px; font-weight: 500; font-size: 12px; cursor: pointer; margin: 0; }
   .microw input { width: auto; margin: 0; }
   .micnote { font-size: 11px; color: var(--ink2); }
   .micnote a { color: var(--accent); cursor: pointer; font-weight: 600; }
-  .srcchips { display: flex; flex-direction: column; gap: 6px; }
-  .srcchip { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--ink2); }
-  .srcchip .d { width: 8px; height: 8px; border-radius: 50%; flex: none; }
-  .srcchip .d.tab { background: var(--accent); }
-  .srcchip .d.mic { background: #2563eb; }
-  .srcchip.on { color: var(--ink); }
-  .srcchip.pending { opacity: .6; }
+  /* source identity mark */
+  .src-mark { width: 9px; height: 9px; border-radius: 3px; flex: none; display: inline-block; }
+  .src-mark--online { background: var(--accent); }
+  .src-mark--mic { background: #2563eb; }
+  /* toggle switch */
+  .fs-switch { display: inline-flex; align-items: center; cursor: pointer; flex: none; }
+  .fs-switch__track { width: 34px; height: 20px; border-radius: 999px; background: #cfccc4; position: relative; transition: background .16s ease; flex: none; }
+  .fs-switch__thumb { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: left .16s ease; }
+  .fs-switch.is-on .fs-switch__track { background: var(--accent); }
+  .fs-switch.is-on .fs-switch__thumb { left: 16px; }
+  /* "also capture mic" row (idle) */
+  .mic-row { display: flex; flex-direction: column; gap: 11px; padding: 12px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface); }
+  .mic-row__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .mic-row__label { display: flex; align-items: center; gap: 9px; font-size: 12px; font-weight: 600; }
+  .mic-row__label .src-mark { width: 10px; height: 10px; }
+  .mic-row__sub { font-size: 12px; color: var(--ink2); line-height: 1.45; }
+  .mic-row__action { display: flex; align-items: center; gap: 9px; padding-top: 11px; border-top: 1px solid var(--border); }
+  .mic-ready { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #2f7d4f; flex: 1; }
+  .mic-ready .d { width: 8px; height: 8px; border-radius: 50%; background: #2f7d4f; flex: none; }
+  .mic-ready__change { font: inherit; font-size: 12px; font-weight: 600; color: var(--accent); cursor: pointer; background: none; border: none; padding: 0; }
+  /* per-source chips (recording) */
+  .srcchips { display: flex; flex-direction: column; gap: 8px; }
+  .src-chip { display: flex; align-items: center; gap: 10px; padding: 9px 12px 9px 14px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); position: relative; }
+  .src-chip__edge { position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px; border-radius: 3px; }
+  .src-chip--online .src-chip__edge { background: var(--accent); }
+  .src-chip--mic .src-chip__edge { background: #2563eb; }
+  .src-chip__body { flex: 1; min-width: 0; }
+  .src-chip__name { font-size: 12px; font-weight: 600; display: flex; align-items: center; gap: 7px; }
+  .src-chip__meta { font-family: "Geist Mono", ui-monospace, monospace; font-size: 11px; color: var(--muted); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .src-chip__live { display: inline-flex; align-items: center; gap: 6px; font-family: "Geist Mono", ui-monospace, monospace; font-size: 11px; color: var(--accent); font-weight: 600; flex: none; }
+  .src-chip--mic .src-chip__live { color: #2563eb; }
+  .src-chip__live i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; animation: pulse 1.8s ease-out infinite; }
+  .src-chip--starting { opacity: .92; }
+  .src-chip__starting { display: inline-flex; align-items: center; gap: 7px; font-family: "Geist Mono", ui-monospace, monospace; font-size: 11px; color: #b45309; flex: none; }
+  .src-chip__spin { width: 11px; height: 11px; border: 2px solid currentColor; border-top-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .src-chip--error { background: #fbeae8; border-color: transparent; }
+  .src-chip--error .src-chip__edge { background: var(--rec); }
+  .src-chip__err { display: flex; align-items: flex-start; gap: 6px; font-size: 12px; color: var(--rec); font-weight: 500; margin-top: 4px; line-height: 1.4; }
+  .src-chip__fix { font: inherit; font-size: 12px; font-weight: 600; color: var(--rec); cursor: pointer; background: none; border: none; padding: 0; text-decoration: underline; text-underline-offset: 2px; }
 </style>
 </head>
 <body>

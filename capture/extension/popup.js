@@ -49,6 +49,7 @@ function extractMeeting(tab) {
 let activeTabId = null;
 let meeting = { platform: "", externalMeetingId: "", name: "", sub: "", iconUrl: "" };
 let lastCapturing = null; // last rendered capture state (so the live listener only re-renders on transitions)
+let lastSig = ""; // per-source signature (which sources + live/starting/error) — re-render when it changes
 let capTab = false; // which sources THIS start requested (for the recording chips during startup grace)
 let capMic = false;
 
@@ -66,7 +67,7 @@ async function init() {
   meeting = extractMeeting(tab);
   const st = await chrome.storage.local.get([
     "backendBase", "deviceToken", "deviceEmail", "minutesCapture",
-    "micEnabled", "micGranted", "micDeviceId", "micAec",
+    "micEnabled", "micGranted", "micDeviceId", "micDeviceLabel", "micAec",
   ]);
   if (!st.backendBase) return renderNoServer();
   if (!st.deviceToken) return renderLogin(st);
@@ -145,6 +146,25 @@ async function signOut() {
   init();
 }
 
+// dual-source markup helpers (mirror the designer's screens-dual-ext.jsx)
+function micSwitch(on) {
+  return `<label class="fs-switch ${on ? "is-on" : ""}" id="micchk"><span class="fs-switch__track"><span class="fs-switch__thumb"></span></span></label>`;
+}
+// A per-source recording chip. kind: "online"|"mic"; state: "live"|"starting"|"error".
+function srcChipHtml(kind, name, meta, state) {
+  if (state === "error") {
+    return `<div class="src-chip src-chip--${kind} src-chip--error"><span class="src-chip__edge"></span>
+      <div class="src-chip__body"><div class="src-chip__name">${name}</div>
+        <div class="src-chip__err"><span style="font-weight:700">✕</span><span>${esc(meta || "Transcription stopped.")} <button class="src-chip__fix" data-fix>check your plan / top up</button></span></div></div></div>`;
+  }
+  const right = state === "starting"
+    ? `<span class="src-chip__starting"><span class="src-chip__spin"></span>starting…</span>`
+    : `<span class="src-chip__live"><i></i>live</span>`;
+  return `<div class="src-chip src-chip--${kind} ${state === "starting" ? "src-chip--starting" : ""}"><span class="src-chip__edge"></span>
+    <div class="src-chip__body"><div class="src-chip__name">${name}</div>${meta ? `<div class="src-chip__meta">${esc(meta)}</div>` : ""}</div>
+    ${right}</div>`;
+}
+
 // ---------- signed-in: capture (idle / recording / no-meeting) ----------
 function renderCapture(st) {
   showFoot(st.deviceEmail);
@@ -156,6 +176,7 @@ function renderCapture(st) {
     // can still capture it on its own ("Host mic" only) — e.g. dictation or an in-person talk.
     const micOn = !!st.micEnabled;
     const micReady = micOn && st.micGranted;
+    const devLabel = st.micDeviceLabel ? esc(st.micDeviceLabel) : "default microphone";
     view.innerHTML = `
       <div class="empty">
         ${micReady
@@ -166,19 +187,22 @@ function renderCapture(st) {
           ? "No capturable audio on this tab — minutes will record just your microphone (Host mic)."
           : "Open a Meet/Teams call or any tab playing audio — or turn on your mic to record just your voice."}</div>
       </div>
-      <label class="microw"><input type="checkbox" id="micchk" ${micOn ? "checked" : ""} /><span>Capture my microphone (Host mic)</span></label>
-      ${micOn && !st.micGranted ? `<button class="btn sm" id="micsetup">Grant microphone access…</button>` : ""}
+      <div class="mic-row">
+        <div class="mic-row__head">
+          <span class="mic-row__label"><span class="src-mark src-mark--mic"></span>Capture my microphone</span>
+          ${micSwitch(micOn)}
+        </div>
+        ${micReady
+          ? `<div class="mic-row__action" style="border-top:none;padding-top:0"><span class="mic-ready"><span class="d"></span>Mic ready · ${devLabel}</span><button class="mic-ready__change" id="mictest">Test / change</button></div>`
+          : (micOn
+              ? `<div class="mic-row__action"><button class="btn sm" id="micsetup" style="flex:1"><span class="src-mark src-mark--mic" style="margin-right:2px"></span>Grant microphone access</button></div>`
+              : `<div class="mic-row__sub">Records your own voice as a separate <b>Host mic</b> track. Off by default.</div>`)}
+      </div>
       ${micReady
-        ? `<div class="micnote">🎙 Mic ready — <a id="mictest">test / change</a></div>
-           <button class="btn lg primary" id="start">● Start recording (mic only)</button>
+        ? `<button class="btn lg primary" id="start" style="margin-top:auto">● Start recording (mic only)</button>
            <div class="cap-note">Records your microphone only — nothing from this tab.</div>`
-        : `<button class="btn lg" id="start" disabled style="background:var(--surface2);color:var(--muted)">● Start recording</button>`}`;
-    const chk = $("micchk");
-    if (chk) chk.onchange = async () => {
-      await chrome.storage.local.set({ micEnabled: chk.checked });
-      if (chk.checked && !st.micGranted) openMicSetup();
-      else init();
-    };
+        : `<button class="btn lg" id="start" disabled style="background:var(--surface2);color:var(--muted);margin-top:auto">● Start recording</button>`}`;
+    wireMicToggle(st);
     if ($("micsetup")) $("micsetup").onclick = openMicSetup;
     if ($("mictest")) $("mictest").onclick = openMicSetup;
     if (micReady && $("start")) $("start").onclick = () => start({ micOnly: true });
@@ -188,59 +212,84 @@ function renderCapture(st) {
   const ctx = `
     <div class="ctx">
       <img src="${esc(meeting.iconUrl)}" alt="" width="30" height="30" />
-      <div style="min-width:0"><div class="ctx__name" title="${esc(meeting.name)}">${esc(meeting.name)}</div><div class="ctx__id">${esc(meeting.sub)}</div></div>
+      <div style="flex:1;min-width:0"><div class="ctx__name" title="${esc(meeting.name)}">${esc(meeting.name)}</div><div class="ctx__id">${esc(meeting.sub)}</div></div>
+      <span class="src-mark src-mark--online" title="Online stream"></span>
     </div>`;
 
   if (capturing) {
     const _s = st.minutesCapture?.sources || {};
-    const fr = (src) => {
-      const m = (_s[src]?.status || "").match(/(\d[\d,]*)\s*frames/);
-      return m ? "· " + esc(m[1]) + " frames" : "";
-    };
-    // Which sources this capture has. The offscreen publishes the live truth to _s; capTab/capMic
-    // cover the brief startup grace (and a popup reopened mid-capture relies on _s alone).
-    const tabLive = !!_s.tab, micLive = !!_s.mic;
-    const showTab = tabLive || capTab;
-    const showMic = micLive || capMic;
+    const tabObj = _s.tab, micObj = _s.mic;
+    const tabLive = !!tabObj?.capturing, micLive = !!micObj?.capturing;
+    // A source is shown if it's published (live OR an error chip) or this start requested it (grace).
+    const showTab = !!tabObj || capTab;
+    const showMic = !!micObj || capMic;
     // Mic-only captures (a blank/non-capturable tab) get a mic context instead of the meeting card.
     const recCtx = (showTab || (!showMic && meeting.platform))
-      ? `<div class="ctx"><img src="${esc(meeting.iconUrl || "brand/icon-web.svg")}" alt="" width="30" height="30" /><div style="min-width:0"><div class="ctx__name" title="${esc(meeting.name || "Recording")}">${esc(meeting.name || "Recording")}</div><div class="ctx__id">${esc(meeting.sub || "")}</div></div></div>`
-      : `<div class="ctx"><div style="width:30px;height:30px;display:grid;place-items:center;font-size:20px">🎙</div><div style="min-width:0"><div class="ctx__name">Mic recording</div><div class="ctx__id">Host mic only</div></div></div>`;
+      ? `<div class="ctx"><img src="${esc(meeting.iconUrl || "brand/icon-web.svg")}" alt="" width="30" height="30" /><div style="flex:1;min-width:0"><div class="ctx__name" title="${esc(meeting.name || "Recording")}">${esc(meeting.name || "Recording")}</div><div class="ctx__id">${esc(meeting.sub || "")}</div></div><span class="src-mark src-mark--online" title="Online stream"></span></div>`
+      : `<div class="ctx"><div style="width:30px;height:30px;display:grid;place-items:center;font-size:20px">🎙</div><div style="flex:1;min-width:0"><div class="ctx__name">Mic recording</div><div class="ctx__id">Host mic only</div></div><span class="src-mark src-mark--mic" title="Host mic"></span></div>`;
+    const chip = (kind, name, obj) => {
+      const state = obj?.error ? "error" : (obj?.capturing ? "live" : "starting");
+      const meta = state === "live" ? `${(obj.frames || 0).toLocaleString()} frames`
+        : state === "error" ? (obj.status || "Transcription stopped.")
+          : "";
+      return srcChipHtml(kind, name, meta, state);
+    };
+    const liveCount = (tabLive ? 1 : 0) + (micLive ? 1 : 0);
+    const totalShown = (showTab ? 1 : 0) + (showMic ? 1 : 0);
+    const anyErr = !!tabObj?.error || !!micObj?.error;
+    const header = anyErr ? `RECORDING · ${liveCount} of ${totalShown}`
+      : totalShown > 1 ? `RECORDING · ${totalShown} sources`
+        : "RECORDING";
+    const note = anyErr
+      ? "Tab + mic open two Soniox connections. If your plan caps concurrency, the second is rejected — the other source keeps recording."
+      : totalShown > 1 ? "Two separate transcripts — merged later."
+        : `Streaming to ${esc(hostOf((st.backendBase) || ""))}`;
     view.innerHTML = `
       ${recCtx}
-      <div class="rec"><div class="rec__label"><span class="dot"></span>RECORDING</div></div>
+      <div class="rec"><div class="rec__label"><span class="dot"></span>${header}</div></div>
       <div class="srcchips">
-        ${showTab ? `<div class="srcchip ${tabLive ? "on" : "pending"}"><span class="d tab"></span>Online stream ${tabLive ? fr("tab") : "· starting…"}</div>` : ""}
-        ${showMic ? `<div class="srcchip ${micLive ? "on" : "pending"}"><span class="d mic"></span>Host mic ${micLive ? fr("mic") : "· starting…"}</div>` : ""}
+        ${showTab ? chip("online", "Online stream", tabObj) : ""}
+        ${showMic ? chip("mic", "Host mic", micObj) : ""}
       </div>
-      <div class="meterwrap"><div class="meter on"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
-      <button class="btn lg stop" id="stop">■ Stop</button>
-      <div class="cap-note">Streaming to ${esc(hostOf((st.backendBase) || ""))}</div>`;
+      <button class="btn lg stop" id="stop" style="margin-top:auto">■ ${totalShown > 1 ? "Stop both" : "Stop"}</button>
+      <div class="cap-note">${note}</div>`;
     $("stop").onclick = stop;
+    view.querySelectorAll("[data-fix]").forEach((b) => (b.onclick = () => chrome.tabs.create({ url: "https://console.soniox.com/" })));
   } else {
     const micOn = !!st.micEnabled;
     const micReady = micOn && st.micGranted;
+    const devLabel = st.micDeviceLabel ? esc(st.micDeviceLabel) : "default microphone";
     view.innerHTML = `
       ${ctx}
-      <div class="meterwrap"><div class="meter idle"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
-      <label class="microw"><input type="checkbox" id="micchk" ${micOn ? "checked" : ""} /><span>Also capture my microphone (Host mic)</span></label>
-      ${micOn
-        ? (micReady
-            ? `<div class="micnote">🎙 Mic ready — <a id="mictest">test / change</a></div>`
-            : `<button class="btn sm" id="micsetup">Grant microphone access…</button>`)
-        : ""}
-      <button class="btn lg primary" id="start">● Start recording</button>
-      <div class="cap-note">Captures this tab's audio${micReady ? " + your mic" : ""} — you still hear everything.</div>`;
+      <div class="mic-row">
+        <div class="mic-row__head">
+          <span class="mic-row__label"><span class="src-mark src-mark--mic"></span>Also capture my microphone</span>
+          ${micSwitch(micOn)}
+        </div>
+        ${micReady
+          ? `<div class="mic-row__action" style="border-top:none;padding-top:0"><span class="mic-ready"><span class="d"></span>Mic ready · ${devLabel}</span><button class="mic-ready__change" id="mictest">Test / change</button></div>`
+          : `<div class="mic-row__sub">Adds a separate <b>Host mic</b> track for your own voice — no second bot account. Off by default.</div>
+             ${micOn ? `<div class="mic-row__action"><button class="btn sm" id="micsetup" style="flex:1"><span class="src-mark src-mark--mic" style="margin-right:2px"></span>Grant microphone access</button></div>` : ""}`}
+      </div>
+      <button class="btn lg primary" id="start" style="margin-top:auto">● Start recording${micReady ? " · 2 sources" : ""}</button>
+      <div class="cap-note">${micReady ? "Online stream + Host mic, kept separate." : "Captures this tab's audio — you still hear everything."}</div>`;
     $("start").onclick = start;
-    const chk = $("micchk");
-    if (chk) chk.onchange = async () => {
-      await chrome.storage.local.set({ micEnabled: chk.checked });
-      if (chk.checked && !st.micGranted) openMicSetup();
-      else init();
-    };
+    wireMicToggle(st);
     if ($("mictest")) $("mictest").onclick = openMicSetup;
     if ($("micsetup")) $("micsetup").onclick = openMicSetup;
   }
+}
+
+// Wire the fs-switch mic toggle (#micchk is a label, not a checkbox — flip on click).
+function wireMicToggle(st) {
+  const sw = $("micchk");
+  if (!sw) return;
+  sw.onclick = async () => {
+    const on = !sw.classList.contains("is-on"); // the state we're switching TO
+    await chrome.storage.local.set({ micEnabled: on });
+    if (on && !st.micGranted) openMicSetup(); // first enable -> grant + test on the setup page
+    else init();
+  };
 }
 
 function openMicSetup() {
@@ -350,17 +399,29 @@ async function isRecording() {
   return captureActive();
 }
 
-// Converge the popup to the real state; refresh the frame counter in place when unchanged (no flicker).
+// Converge the popup to the real state. Re-render on a liveness transition OR a per-source change
+// (a source going live / starting / erroring); otherwise refresh frame counts in place (no flicker).
 async function reconcile() {
   const st = await chrome.storage.local.get(["minutesCapture", "deviceToken", "backendBase"]);
   if (!st.deviceToken || !st.backendBase) return;
   const active = await isRecording();
-  if (active !== lastCapturing) { lastCapturing = active; init(); return; }
+  const _s = st.minutesCapture?.sources || {};
+  const sig = ["tab", "mic"].map((k) => {
+    const o = _s[k];
+    return !o ? "-" : o.error ? "e" : o.capturing ? "L" : "s";
+  }).join("");
+  if (active !== lastCapturing || (active && sig !== lastSig)) {
+    lastCapturing = active;
+    lastSig = sig;
+    init();
+    return;
+  }
   if (active) {
-    const fr = view.querySelector(".rec__frames");
-    const _s = st.minutesCapture?.sources || {};
-    const m = ((_s.tab || _s.mic || {}).status || "").match(/(\d[\d,]*)\s*frames/);
-    if (fr) fr.textContent = m ? "frames " + m[1] : "live";
+    for (const k of ["tab", "mic"]) {
+      const o = _s[k];
+      const el = view.querySelector(`.src-chip--${k === "tab" ? "online" : "mic"} .src-chip__meta`);
+      if (el && o?.capturing) el.textContent = `${(o.frames || 0).toLocaleString()} frames`;
+    }
   }
 }
 

@@ -1,0 +1,157 @@
+/* ============================================================
+   minutes — Dual-Source Capture: net-new primitives
+   Layered on fs-styles.css + app-kit.css. Everything here is the
+   design treatment for tab + mic capture (the "Online stream" /
+   "Host mic" feature). Dev team can lift these classes directly.
+
+   SOURCE VOCABULARY (fixed labels — do not rename in UI):
+     • "Online stream"  = the browser tab's audio   (enum: tab)
+     • "Host mic"       = the capturing user's mic   (enum: mic)
+     • "Upload"         = uploaded file              (enum: upload)
+   ============================================================ */
+
+:root {
+  /* Source identity colors — distinct from status (live/error) colors.
+     Online stream rides the brand flame; Host mic gets a clear blue.
+     (Mic blue is intentionally NOT --fs-info so the two never collide
+      with info banners; if you'd rather tokenize it, alias here.) */
+  --src-online:       var(--fs-accent);     /* #DD5A1A */
+  --src-online-soft:  var(--fs-accent-soft);
+  --src-online-ink:   var(--fs-accent-press);
+  --src-mic:          #2563EB;
+  --src-mic-soft:     #E5EDFD;
+  --src-mic-ink:      #1D4FBF;
+  --src-upload:       var(--fs-ink-secondary);
+}
+[data-theme="dark"] {
+  --src-mic:       #6E97E0;
+  --src-mic-soft:  #1E2840;
+  --src-mic-ink:   #A9C4F2;
+}
+
+/* ---------- source dot / square marker ---------- */
+.src-mark { width: 9px; height: 9px; border-radius: 3px; flex: none; display: inline-block; }
+.src-mark--online { background: var(--src-online); }
+.src-mark--mic    { background: var(--src-mic); }
+.src-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; display: inline-block; }
+.src-dot--online { background: var(--src-online); }
+.src-dot--mic    { background: var(--src-mic); }
+
+/* ---------- source chip (popup recording rows + web header pills) ---------- */
+.src-chip {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 12px; border-radius: var(--fs-radius);
+  border: 1px solid var(--fs-border); background: var(--fs-surface);
+  position: relative;
+}
+.src-chip__edge { position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px; border-radius: 3px; }
+.src-chip--online .src-chip__edge { background: var(--src-online); }
+.src-chip--mic .src-chip__edge { background: var(--src-mic); }
+.src-chip__body { flex: 1; min-width: 0; }
+.src-chip__name { font-size: var(--fs-text-sm); font-weight: 600; display: flex; align-items: center; gap: 7px; }
+.src-chip__meta { font-family: var(--fs-font-mono); font-size: 11px; color: var(--fs-ink-muted); margin-top: 3px; display: flex; align-items: center; gap: 6px; }
+.src-chip__live { display: inline-flex; align-items: center; gap: 6px; font-family: var(--fs-font-mono); font-size: 11px; color: var(--src-online); font-weight: 600; }
+.src-chip--mic .src-chip__live { color: var(--src-mic); }
+.src-chip__live i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; animation: m-pulse-mic 1.8s var(--fs-ease) infinite; }
+@keyframes m-pulse-mic { 0% { box-shadow: 0 0 0 0 currentColor; } 70% { box-shadow: 0 0 0 5px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+/* starting… (mic warming up) */
+.src-chip--starting { opacity: 0.92; }
+.src-chip--starting .src-chip__starting { display: inline-flex; align-items: center; gap: 7px; font-family: var(--fs-font-mono); font-size: 11px; color: var(--fs-warning); }
+.src-chip__spin { width: 11px; height: 11px; border: 2px solid currentColor; border-top-color: transparent; border-radius: 50%; animation: fs-spin 0.7s linear infinite; }
+/* error (Soniox rejected this source) */
+.src-chip--error { background: var(--fs-danger-soft); border-color: transparent; }
+.src-chip--error .src-chip__edge { background: var(--fs-danger); }
+.src-chip__err { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-text-sm); color: var(--fs-danger); font-weight: 500; }
+.src-chip__fix { font-family: var(--fs-font-sans); font-size: var(--fs-text-sm); font-weight: 600; color: var(--fs-danger); cursor: pointer; background: none; border: none; padding: 0; text-decoration: underline; text-underline-offset: 2px; }
+
+/* ---------- "also capture mic" toggle row (popup idle) ---------- */
+.mic-row { display: flex; flex-direction: column; gap: 11px; padding: 12px; border: 1px solid var(--fs-border); border-radius: var(--fs-radius); background: var(--fs-surface); }
+.mic-row__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.mic-row__label { display: flex; align-items: center; gap: 9px; font-size: var(--fs-text-sm); font-weight: 600; }
+.mic-row__label .src-mark { width: 10px; height: 10px; }
+.mic-row__sub { font-size: 12px; color: var(--fs-ink-secondary); line-height: 1.45; }
+.mic-row__action { display: flex; align-items: center; gap: 9px; padding-top: 11px; border-top: 1px solid var(--fs-border); }
+/* mic-ready affordance */
+.mic-ready { display: flex; align-items: center; gap: 8px; font-size: var(--fs-text-sm); color: var(--fs-success); flex: 1; }
+.mic-ready__change { font-family: var(--fs-font-sans); font-size: var(--fs-text-sm); font-weight: 600; color: var(--fs-accent); cursor: pointer; background: none; border: none; padding: 0; }
+
+/* ---------- toolbar icon plate (states preview) ---------- */
+.tb-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+.tb-cell { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 16px 8px; border: 1px solid var(--fs-border); border-radius: var(--fs-radius-lg); background: var(--fs-surface); }
+.tb-cell__sizes { display: flex; align-items: flex-end; gap: 12px; height: 52px; }
+.tb-cell__name { font-size: var(--fs-text-sm); font-weight: 600; }
+.tb-cell__enum { font-family: var(--fs-font-mono); font-size: 10px; color: var(--fs-ink-muted); }
+.tb-chrome { display: inline-flex; align-items: center; gap: 4px; padding: 5px 7px; border-radius: var(--fs-radius); background: var(--fs-surface-3); }
+
+/* ---------- permission page (extension full page) ---------- */
+.perm { height: 100%; display: flex; flex-direction: column; background: var(--fs-bg); }
+.perm__bar { height: 48px; flex: none; display: flex; align-items: center; gap: 9px; padding: 0 20px; border-bottom: 1px solid var(--fs-border); background: var(--fs-surface); }
+.perm__bar b { font-weight: 600; font-size: 15px; letter-spacing: -0.02em; }
+.perm__bar .tag { margin-left: 2px; font-size: 13px; color: var(--fs-ink-secondary); }
+.perm__body { flex: 1; display: flex; align-items: center; justify-content: center; padding: 28px; min-height: 0; }
+.perm__card { width: 100%; max-width: 420px; }
+.perm__ic { width: 52px; height: 52px; border-radius: 14px; display: grid; place-items: center; margin-bottom: 18px; }
+.perm__ic--mic { background: var(--src-mic-soft); color: var(--src-mic); }
+.perm__ic--warn { background: var(--fs-warning-soft); color: var(--fs-warning); }
+.perm__ic--err { background: var(--fs-danger-soft); color: var(--fs-danger); }
+.perm h2 { font-size: var(--fs-text-xl); font-weight: 600; letter-spacing: -0.02em; margin: 0 0 8px; }
+.perm p { font-size: var(--fs-text-md); color: var(--fs-ink-secondary); line-height: 1.5; margin: 0 0 20px; }
+.perm code { font-family: var(--fs-font-mono); font-size: 0.88em; background: var(--fs-surface-3); padding: 1px 6px; border-radius: var(--fs-radius-sm); color: var(--fs-ink); }
+
+/* live level meter — horizontal confirm bar for device pick */
+.lvl { display: flex; align-items: center; gap: 3px; height: 30px; padding: 0 2px; }
+.lvl i { flex: 1; border-radius: 2px; background: var(--src-mic); transform-origin: bottom; }
+.lvl i.is-on { opacity: 1; } .lvl i.is-off { opacity: 0.18; }
+.lvl-wrap { display: flex; flex-direction: column; gap: 7px; padding: 13px 14px; border: 1px solid var(--fs-border); border-radius: var(--fs-radius); background: var(--fs-surface-2); }
+.lvl-wrap__cap { display: flex; align-items: center; justify-content: space-between; font-family: var(--fs-font-mono); font-size: 11px; color: var(--fs-ink-muted); }
+
+/* permission setup field stack */
+.perm-field { display: flex; flex-direction: column; gap: 7px; margin-bottom: 16px; }
+.perm-toggle-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 14px 0; border-top: 1px solid var(--fs-border); }
+.perm-toggle-row__t { font-size: var(--fs-text-md); font-weight: 600; }
+.perm-toggle-row__d { font-size: 12px; color: var(--fs-ink-secondary); margin-top: 3px; max-width: 38ch; }
+.perm__actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 6px; }
+
+/* ---------- public share — two source columns ---------- */
+.share2 { display: grid; gap: 1px; background: var(--fs-border); }
+.share2--two { grid-template-columns: 1fr 1fr; }
+.share2--one { grid-template-columns: 1fr; }
+.share2__col { background: var(--fs-bg); display: flex; flex-direction: column; min-width: 0; }
+.share2__head { display: flex; align-items: center; gap: 9px; padding: 13px 18px; border-bottom: 1px solid var(--fs-border); background: var(--fs-surface); }
+.share2__head .src-mark { width: 10px; height: 10px; }
+.share2__head b { font-size: var(--fs-text-sm); font-weight: 600; }
+.share2__head .meta { margin-left: auto; font-family: var(--fs-font-mono); font-size: 11px; color: var(--fs-ink-muted); }
+.share2__scroll { padding: 6px 12px 18px; }
+/* a shared line with its translation inline beneath */
+.sline { padding: 11px 6px; border-bottom: 1px dashed var(--fs-border); }
+.sline:last-child { border-bottom: 0; }
+.sline__meta { display: flex; align-items: baseline; gap: 8px; margin-bottom: 5px; }
+.sline__lang { font-family: var(--fs-font-mono); font-size: 10px; font-weight: 600; padding: 1px 5px; border-radius: 4px; background: var(--fs-ink); color: var(--fs-surface); }
+.sline__time { font-family: var(--fs-font-mono); font-size: 11px; color: var(--fs-ink-muted); }
+.sline__src { font-size: var(--fs-text-md); line-height: 1.5; color: var(--fs-ink); text-wrap: pretty; }
+.sline__tr { font-size: var(--fs-text-base); line-height: 1.45; color: var(--fs-ink-secondary); margin-top: 6px; padding-left: 14px; border-left: 2px solid var(--fs-border-strong); }
+.sline[dir="rtl"] .sline__meta { flex-direction: row-reverse; }
+.sline[dir="rtl"] .sline__src { text-align: right; direction: rtl; font-size: 17px; }
+.sline[dir="rtl"] .sline__tr { padding-left: 0; padding-right: 14px; border-left: 0; border-right: 2px solid var(--fs-border-strong); text-align: right; }
+
+/* ---------- mobile source row (above tx/tl segmented) ---------- */
+.msrc { display: flex; gap: 8px; padding: 10px 12px 4px; }
+.msrc__btn {
+  flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 9px 10px; border-radius: var(--fs-radius); border: 1px solid var(--fs-border);
+  background: var(--fs-surface); font-family: var(--fs-font-sans); font-size: var(--fs-text-sm);
+  font-weight: 600; color: var(--fs-ink-secondary); cursor: pointer;
+}
+.msrc__btn .src-mark { width: 9px; height: 9px; }
+.msrc__btn.is-selected { color: var(--fs-ink); border-color: var(--fs-border-ink); background: var(--fs-surface); box-shadow: var(--fs-shadow-sm); }
+.msrc__btn.is-selected.online { border-color: var(--src-online); }
+.msrc__btn.is-selected.mic { border-color: var(--src-mic); }
+.msrc__cnt { font-family: var(--fs-font-mono); font-size: 10px; color: var(--fs-ink-muted); font-weight: 400; }
+
+/* spec callout block used on artboards */
+.spec { border: 1px solid var(--fs-border); border-radius: var(--fs-radius-lg); background: var(--fs-surface); padding: 18px 20px; }
+.spec__eyebrow { font-family: var(--fs-font-mono); font-size: 11px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--fs-ink-muted); margin-bottom: 12px; }
+.spec ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 8px; }
+.spec li { font-size: var(--fs-text-base); color: var(--fs-ink-secondary); line-height: 1.5; }
+.spec li b { color: var(--fs-ink); font-weight: 600; }
+.spec__rec { display: inline-flex; align-items: center; gap: 7px; margin-bottom: 12px; font-size: var(--fs-text-sm); font-weight: 600; color: var(--fs-success); }

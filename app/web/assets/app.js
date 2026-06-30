@@ -99,6 +99,9 @@ const segOrder = []; // segment ids in display order for the open meeting
 let selectedSource = "tab";
 const seenSources = new Set();
 const SRC_LABEL = { tab: "Online stream", mic: "Host mic", upload: "Upload" };
+// Source-identity color mark (dual.css): tab = orange "online", mic = blue. Upload has no mark.
+const SRC_MARK = { tab: "online", mic: "mic" };
+const srcMark = (s) => (SRC_MARK[s] ? `<span class="src-mark src-mark--${SRC_MARK[s]}"></span>` : "");
 
 // ============================================================ LOGIN
 function renderLogin() {
@@ -261,8 +264,8 @@ function renderSourceBar() {
   if (!bar) return;
   const srcs = [...seenSources];
   if (srcs.length <= 1) { bar.innerHTML = ""; return; }
-  bar.innerHTML = `<div class="fs-segmented">${srcs
-    .map((s) => `<button class="fs-segmented__item ${s === selectedSource ? "is-selected" : ""}" data-src="${esc(s)}">${esc(SRC_LABEL[s] || s)}</button>`)
+  bar.innerHTML = `<div class="fs-segmented" role="tablist" aria-label="Audio source">${srcs
+    .map((s) => `<button class="fs-segmented__item ${s === selectedSource ? "is-selected" : ""}" data-src="${esc(s)}" role="tab">${srcMark(s)}${esc(SRC_LABEL[s] || s)}</button>`)
     .join("")}</div>`;
   bar.querySelectorAll("[data-src]").forEach((b) => (b.onclick = () => switchSource(b.dataset.src)));
 }
@@ -274,11 +277,16 @@ function switchSource(src) {
 }
 
 function applySourceFilter() {
-  const val = seenSources.size > 1 ? selectedSource : ""; // "" = show all (single source)
+  const multi = seenSources.size > 1;
+  const val = multi ? selectedSource : ""; // "" = show all (single source)
   for (const id of ["#transcript", "#translation"]) {
     const el = root.querySelector(id);
     if (el) el.setAttribute("data-src", val);
   }
+  // Source caption on the translation head ("· Online stream"). The transcript head carries the
+  // switcher itself, so it needs no caption — mirrors the design's per-column source label.
+  const ls = root.querySelector("#tlsrc");
+  if (ls) ls.textContent = multi ? ` · ${SRC_LABEL[selectedSource] || selectedSource}` : "";
 }
 
 function renderMidHead(m) {
@@ -326,11 +334,12 @@ function openExportDialog(m) {
           <option value="md">Markdown (.md)</option>
           <option value="json">JSON (.json)</option>
         </select></div>
-      ${seenSources.size > 1 ? `<div class="fs-field fs-field--block" style="margin-bottom:16px"><label class="fs-label">Audio source</label>
-        <select class="fs-select" id="exsrc">
-          <option value="both">Both sources</option>
-          ${[...seenSources].map((s) => `<option value="${esc(s)}">${esc(SRC_LABEL[s] || s)}</option>`).join("")}
-        </select></div>` : ""}
+      ${seenSources.size > 1 ? `<div class="fs-field fs-field--block" style="margin-bottom:16px"><label class="fs-label">Audio source <span style="color:var(--fs-ink-muted);font-weight:400">· this meeting has two</span></label>
+        <div class="fs-segmented" id="exsrc" style="width:100%">
+          <button type="button" class="fs-segmented__item is-selected" data-src="both" style="flex:1">Both</button>
+          ${[...seenSources].map((s) => `<button type="button" class="fs-segmented__item" data-src="${esc(s)}" style="flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px">${srcMark(s)}${esc(SRC_LABEL[s] || s)}</button>`).join("")}
+        </div>
+        <div class="fs-hint" style="margin-top:6px">"Both" writes labeled sections per source.</div></div>` : ""}
       <label class="fs-switch is-on" id="exts" style="display:flex;margin-bottom:12px"><span class="fs-switch__track"><span class="fs-switch__thumb"></span></span> Include timestamps</label>
       <label class="fs-switch ${hasTl ? "is-on" : "is-disabled"}" id="extr" style="display:flex;margin-bottom:6px"><span class="fs-switch__track"><span class="fs-switch__thumb"></span></span> Include translation</label>
       ${hasTl ? "" : `<div style="font-size:var(--fs-text-xs);color:var(--fs-ink-muted);margin-bottom:8px">No translation configured for this meeting.</div>`}
@@ -349,13 +358,18 @@ function openExportDialog(m) {
   ts.onclick = () => ts.classList.toggle("is-on");
   const tr = dlg.querySelector("#extr");
   if (hasTl) tr.onclick = () => tr.classList.toggle("is-on");
+  const exsrc = dlg.querySelector("#exsrc");
+  if (exsrc) exsrc.querySelectorAll("[data-src]").forEach((b) => (b.onclick = () => {
+    exsrc.querySelectorAll("[data-src]").forEach((x) => x.classList.remove("is-selected"));
+    b.classList.add("is-selected");
+  }));
   dlg.querySelector("#excancel").onclick = close;
   dlg.querySelector("#exgo").onclick = () => {
     const fmt = dlg.querySelector("#exfmt").value;
     const timestamps = ts.classList.contains("is-on");
     const include = (hasTl && tr.classList.contains("is-on")) ? "both" : "transcript";
-    const srcSel = dlg.querySelector("#exsrc");
-    const src = srcSel ? `&source=${encodeURIComponent(srcSel.value)}` : "";
+    const srcSel = dlg.querySelector("#exsrc .is-selected");
+    const src = srcSel ? `&source=${encodeURIComponent(srcSel.dataset.src)}` : "";
     window.open(
       `/api/meetings/${m.id}/export?format=${fmt}&include=${include}&timestamps=${timestamps}${src}`,
       "_blank",
@@ -404,9 +418,10 @@ async function deleteMeeting(m) {
 function renderTlHead(m) {
   const head = root.querySelector("#tlhead");
   const lang = m.translation?.output_language;
-  head.innerHTML = `<span class="m-col__title">Translation${m.translation?.enabled && lang ? " → " + esc(lang) : ""}</span>
+  head.innerHTML = `<span class="m-col__title">Translation<span id="tlsrc" style="color:var(--fs-ink-muted);font-weight:400"></span>${m.translation?.enabled && lang ? " → " + esc(lang) : ""}</span>
     <button class="fs-btn fs-btn--sm fs-btn--ghost fs-btn--icon" id="tlcfg" title="Translation settings">⚙</button>`;
   head.querySelector("#tlcfg").onclick = () => toggleTlConfig(m);
+  applySourceFilter(); // populate the #tlsrc source caption for the current selection
 }
 function toggleTlConfig(m) {
   document.getElementById("tlcfgpanel")?.remove();
@@ -763,8 +778,8 @@ function renderMobileDetail() {
         <div class="mdhead__title"><b>${esc(m.title || m.external_meeting_id)}</b><span><span class="m-dot m-dot--idle"></span>${esc(m.platform)}</span></div>
         <button class="icon-btn" id="mdmore" aria-label="${mSeg === "tl" ? "Translation settings" : "More"}">${mSeg === "tl" ? M_GEAR : M_MORE}</button>
       </div>
-      ${mSeenSources().length > 1 ? `<div class="mchips" style="padding:0 12px 10px">
-        ${mSeenSources().map((s) => `<button class="mchip ${s === mSource ? "is-selected" : ""}" data-msrc="${esc(s)}">${esc(SRC_LABEL[s] || s)}</button>`).join("")}
+      ${mSeenSources().length > 1 ? `<div class="msrc">
+        ${mSeenSources().map((s) => `<button class="msrc__btn ${SRC_MARK[s] || ""} ${s === mSource ? "is-selected" : ""}" data-msrc="${esc(s)}">${srcMark(s)}${esc(SRC_LABEL[s] || s)} <span class="msrc__cnt">·${mSegs.filter((x) => (x.source || "tab") === s).length}</span></button>`).join("")}
       </div>` : ""}
       <div class="mseg"><div class="mseg__track">
         <button class="mseg__item ${mSeg === "tx" ? "is-selected" : ""}" id="segtx">Transcript</button>
@@ -1009,25 +1024,30 @@ async function renderShared(token) {
     <div class="m-stream" id="sstream"></div>`;
   const stream = body.querySelector("#sstream");
   if (!segs.length) { stream.innerHTML = `<div class="m-empty__sub">No transcript content.</div>`; return; }
-  const lineHtml = (s) => {
+  // A shared line: source text + (optional) translation inline beneath; RTL-aware (dual.css .sline).
+  const slineHtml = (s) => {
     const rtl = isRtl(s.source_language);
     const tr = (s.translations || []).find((t) => t.target_language === lang && t.text);
-    return `<div class="m-line" ${rtl ? 'dir="rtl"' : ""}>
-      <div class="m-line__time">${esc(clockOf(s))}</div>
-      <div class="m-line__text">${s.source_language ? `<span class="m-line__lang">${esc(s.source_language)}</span>` : ""}${esc(s.text)}${tr ? `<div style="color:var(--fs-ink-secondary);margin-top:3px" ${isRtl(tr.target_language) ? 'dir="rtl"' : ""}>${esc(tr.text)}</div>` : ""}</div>
-      <div></div></div>`;
+    return `<div class="sline" ${rtl ? 'dir="rtl"' : ""}>
+      <div class="sline__meta"><span class="sline__lang">${esc((s.source_language || "·").toUpperCase())}</span><span class="sline__time">${esc(clockOf(s))}</span></div>
+      <div class="sline__src">${esc(s.text)}</div>
+      ${tr ? `<div class="sline__tr" ${isRtl(tr.target_language) ? 'dir="rtl"' : ""}>${esc(tr.text)}</div>` : ""}</div>`;
   };
   const sources = [...new Set(segs.map((s) => s.source || "tab"))];
-  if (sources.length <= 1) {
-    stream.innerHTML = segs.map(lineHtml).join(""); // single column — byte-identical to before
+  const order = ["tab", "mic", "upload"].filter((s) => sources.includes(s));
+  const linesFor = (src) => segs.filter((s) => (s.source || "tab") === src);
+  const colHead = (src) => `<div class="share2__head">${srcMark(src)}<b>${esc(SRC_LABEL[src] || src)}</b><span class="meta">${linesFor(src).length} lines</span></div>`;
+  if (order.length <= 1) {
+    // Single source — one column (unchanged behaviour, now with a source head).
+    const only = order[0] || "tab";
+    stream.className = "share2 share2--one";
+    stream.innerHTML = `<div class="share2__col">${colHead(only)}<div class="share2__scroll">${segs.map(slineHtml).join("")}</div></div>`;
   } else {
-    // Two labeled columns ("Online stream" + "Host mic"), each its own source's lines.
+    // Two labeled source columns ("Online stream" / "Host mic"), each its own lines.
     body.style.maxWidth = "1100px";
-    const order = ["tab", "mic", "upload"].filter((s) => sources.includes(s));
-    stream.className = "shared-cols";
+    stream.className = "share2 share2--two";
     stream.innerHTML = order
-      .map((src) => `<div class="shared-col"><div class="shared-col__h">${esc(SRC_LABEL[src] || src)}</div>
-        <div class="m-stream">${segs.filter((s) => (s.source || "tab") === src).map(lineHtml).join("")}</div></div>`)
+      .map((src) => `<div class="share2__col">${colHead(src)}<div class="share2__scroll">${linesFor(src).map(slineHtml).join("")}</div></div>`)
       .join("");
   }
 }

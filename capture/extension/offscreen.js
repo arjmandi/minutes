@@ -12,6 +12,8 @@
 const AUTH_SUBPROTOCOL = "minutes.auth.bearer";
 
 const captures = new Map(); // source -> Capture
+const failed = new Map(); // source -> error detail, for sources that died (kept after teardown so
+                          // the popup can show a per-source error chip while the other keeps going)
 let ctx = null;
 let workletReady = null;
 
@@ -27,6 +29,11 @@ function publishStatus() {
   const sources = {};
   for (const [src, c] of captures) {
     sources[src] = { capturing: c.live, frames: c.frames, db: c.lastDb, status: c.status };
+  }
+  // Sources that ended on an error (e.g. Soniox rejected a 2nd concurrent connection) stay visible
+  // as error chips while the OTHER source keeps recording. Cleared when that source restarts.
+  for (const [src, detail] of failed) {
+    if (!sources[src]) sources[src] = { capturing: false, error: true, status: detail };
   }
   try {
     chrome.storage.local.set({ minutesCapture: { sources, at: Date.now() } });
@@ -67,8 +74,11 @@ class Capture {
     this.lastDb = -99;
     this.stopping = false;
     this.ended = false;
+    this.cleanEnded = false; // backend acked "ended" — a clean finish, not a failure
+    this.failDetail = null; // set on an error termination -> kept in `failed` for the popup
     this.live = true; // present-in-map + not torn down
     this.status = "starting…";
+    failed.delete(source); // a fresh start clears any prior error chip for this source
   }
 
   async start(spec) {
@@ -123,10 +133,12 @@ class Capture {
         publishStatus();
       } else if (data.type === "ended") {
         this.status = "ended · " + data.segments + " segments";
+        this.cleanEnded = true;
         this.teardown();
       } else if (["rejected", "conflict", "forbidden", "error"].includes(data.type)) {
         // Surface the backend's actionable detail (e.g. Soniox quota/billing) to the popup.
         this.status = "denied · " + (data.detail || data.reason || data.type);
+        this.failDetail = data.detail || data.reason || "Transcription was rejected.";
         this.live = false;
         publishStatus();
         this.teardown();
@@ -137,7 +149,11 @@ class Capture {
       publishStatus();
     };
     this.ws.onclose = () => {
-      if (!this.stopping) this.status = "disconnected";
+      if (!this.stopping) {
+        this.status = "disconnected";
+        // An abnormal drop (not a user stop, not a clean backend "ended") is an error to surface.
+        if (!this.cleanEnded && !this.failDetail) this.failDetail = "Connection lost.";
+      }
       this.teardown();
     };
     this.node.port.onmessage = (e) => {
@@ -175,6 +191,7 @@ class Capture {
     try { if (this.ws) this.ws.close(); } catch {}
     this.ws = this.node = this.srcNode = this.stream = null;
     captures.delete(this.source);
+    if (this.failDetail) failed.set(this.source, this.failDetail); // keep the error chip visible
     publishStatus();
     if (captures.size === 0) {
       // All sources done: release the shared context and have the background close this doc.

@@ -13,6 +13,7 @@
 <link rel="stylesheet" href="/assets/fs-styles.css" />
 <link rel="stylesheet" href="/assets/app-kit.css" />
 <link rel="stylesheet" href="/assets/mobile.css" />
+<link rel="stylesheet" href="/assets/dual.css" />
 <style>
   html, body { height: 100%; margin: 0; }
   #root { height: 100%; }
@@ -27,12 +28,9 @@
   [data-src="tab"] .m-line[data-source]:not([data-source="tab"]),
   [data-src="mic"] .m-line[data-source]:not([data-source="mic"]),
   [data-src="upload"] .m-line[data-source]:not([data-source="upload"]) { display: none; }
-  #srcbar .fs-segmented { padding: 2px; }
-  #srcbar .fs-segmented__item { padding: 4px 10px; font-size: 12px; }
-  /* Two-column public share (Online stream / Host mic) when a meeting has two sources. */
-  .shared-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
-  .shared-col__h { font-family: var(--fs-font-mono); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--fs-ink-muted); padding-bottom: 8px; border-bottom: 1px solid var(--fs-border); margin-bottom: 4px; }
-  @media (max-width: 760px) { .shared-cols { grid-template-columns: 1fr; } }
+  #srcbar .fs-segmented__item { display: inline-flex; align-items: center; gap: 7px; }
+  /* Two-column public share (dual.css .share2): stack vertically on mobile. */
+  @media (max-width: 760px) { .share2--two { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
