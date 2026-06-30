@@ -16,7 +16,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from app import crypto
-from app.auth.dependencies import REFRESH_COOKIE, SESSION_COOKIE, require_device, require_user
+from app.auth.dependencies import (
+    REFRESH_COOKIE,
+    SESSION_COOKIE,
+    require_user,
+    require_user_or_device,
+)
 from app.auth.passwords import WeakPassword, hash_password, validate_password, verify_password
 from app.auth.sessions import hash_token, issue_access_token, new_opaque_token
 from app.auth.tokens import issue_capability_token
@@ -307,9 +312,12 @@ async def delete_me(
 
 @router.post("/capture/token")
 async def capture_token(
-    body: CaptureTokenBody, request: Request, user: User = Depends(require_device)
+    body: CaptureTokenBody, request: Request, user: User = Depends(require_user_or_device)
 ) -> dict:
-    """Mint a short capability token for the ingest WS, scoped to one meeting."""
+    """Mint a short capability token for the ingest WS, scoped to one meeting.
+
+    Accepts the extension's device bearer OR the web app / PWA's cookie session (so in-app
+    "New Recording" can mint a token without a long-lived bearer in JS)."""
     settings = request.app.state.settings
     async with request.app.state.session_factory() as db:
         meeting = await repo.upsert_meeting(

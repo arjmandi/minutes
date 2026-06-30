@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import mimetypes
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -87,6 +88,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/shared/{token}", include_in_schema=False)
     async def shared_viewer(token: str) -> FileResponse:
         return FileResponse(web_index)
+
+    # PWA: the manifest + service worker must be served at ROOT scope (not under /assets, whose
+    # scope is too narrow) so the installed app — start_url /app, scope / — can register the SW.
+    mimetypes.add_type("application/manifest+json", ".webmanifest")
+
+    @app.get("/manifest.webmanifest", include_in_schema=False)
+    async def manifest() -> FileResponse:
+        return FileResponse(
+            web_dir / "manifest.webmanifest", media_type="application/manifest+json"
+        )
+
+    @app.get("/sw.js", include_in_schema=False)
+    async def service_worker() -> FileResponse:
+        return FileResponse(
+            web_dir / "sw.js",
+            media_type="text/javascript",
+            headers={"Cache-Control": "no-cache"},  # always revalidate the SW itself
+        )
 
     return app
 

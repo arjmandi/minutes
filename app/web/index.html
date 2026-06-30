@@ -2,8 +2,14 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>minutes</title>
+<meta name="theme-color" content="#1b1a17" />
+<link rel="manifest" href="/manifest.webmanifest" />
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-180.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="minutes" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link
@@ -14,6 +20,7 @@
 <link rel="stylesheet" href="/assets/app-kit.css" />
 <link rel="stylesheet" href="/assets/mobile.css" />
 <link rel="stylesheet" href="/assets/dual.css" />
+<link rel="stylesheet" href="/assets/recordflow.css" />
 <style>
   html, body { height: 100%; margin: 0; }
   #root { height: 100%; }
@@ -36,5 +43,11 @@
 <body>
 <div id="root" class="m-app"></div>
 <script src="/assets/app.js"></script>
+<script>
+  // Register the PWA service worker (root scope). Never blocks the app; failures are ignored.
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {}));
+  }
+</script>
 </body>
 </html>

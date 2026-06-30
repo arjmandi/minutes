@@ -1,0 +1,163 @@
+/* ============================================================
+   minutes — "New Recording" mobile-first flow (PWA)
+   Net-new primitives, layered on fs-styles + app-kit + mobile + dual.
+   FIXED CONSTRAINTS honored here:
+     • Mic-only — every New Recording is Host mic. No source switcher.
+     • Echo cancellation default OFF · Silence-suspend default ON.
+     • No speakerphone / audio-tuning UI — device + level test only.
+   Host-mic identity color = --src-mic (defined in dual.css).
+   ============================================================ */
+
+/* ---------- installed-PWA chrome (NO browser address bar) ----------
+   The home-screen app is standalone: themed status bar, safe-area
+   padding top + bottom, no Safari UI. */
+.pwa { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--fs-bg); position: relative; overflow: hidden; }
+.pwa__statusbar {
+  height: 50px; flex: none; display: flex; align-items: flex-end; justify-content: space-between;
+  padding: 0 26px 7px; position: relative; z-index: 5; background: var(--fs-surface);
+}
+.pwa__statusbar.on-accent { background: var(--fs-accent); color: #fff; }
+.pwa__statusbar.on-ink { background: var(--fs-ink); color: var(--fs-bg); }
+.pwa__statusbar .notch { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); width: 116px; height: 30px; background: #000; border-radius: 17px; }
+.pwa__statusbar .t { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+.pwa__statusbar .r { display: flex; align-items: center; gap: 6px; }
+
+/* ---------- New-Recording entry control ---------- */
+/* desktop: split with Upload in the nav header */
+.entry-split { display: flex; gap: 8px; }
+.entry-split .fs-btn { flex: 1; }
+/* mobile: a prominent primary record button (the main action on a phone) */
+.rec-cta {
+  display: flex; align-items: center; justify-content: center; gap: 11px;
+  width: 100%; min-height: 56px; border-radius: var(--fs-radius-lg);
+  background: var(--fs-accent); color: var(--fs-accent-ink);
+  font-family: var(--fs-font-sans); font-weight: 600; font-size: var(--fs-text-lg);
+  border: none; box-shadow: var(--fs-shadow); cursor: pointer;
+}
+.rec-cta__dot { width: 16px; height: 16px; border-radius: 50%; background: currentColor; }
+.entry-or { display: flex; align-items: center; gap: 12px; color: var(--fs-ink-muted); font-size: var(--fs-text-sm); margin: 14px 0; }
+.entry-or::before, .entry-or::after { content: ""; flex: 1; height: 1px; background: var(--fs-border); }
+.upload-link { display: flex; align-items: center; justify-content: center; gap: 9px; width: 100%; min-height: 48px; }
+
+/* first-run two-path */
+.firstrun { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; padding: 36px 26px; }
+.firstrun__mark { width: 50px; height: 50px; opacity: 0.9; }
+.firstrun__title { font-size: var(--fs-text-xl); font-weight: 600; letter-spacing: -0.02em; }
+.firstrun__sub { font-size: var(--fs-text-md); color: var(--fs-ink-secondary); max-width: 30ch; line-height: 1.5; margin-bottom: 8px; }
+.firstrun__paths { display: flex; flex-direction: column; gap: 12px; width: 100%; margin-top: 8px; }
+.path-card { display: flex; align-items: center; gap: 14px; padding: 16px; border: 1px solid var(--fs-border); border-radius: var(--fs-radius-lg); background: var(--fs-surface); text-align: left; cursor: pointer; }
+.path-card--primary { border-color: var(--src-mic); background: var(--src-mic-soft); }
+.path-card__ic { width: 42px; height: 42px; border-radius: 11px; flex: none; display: grid; place-items: center; }
+.path-card--primary .path-card__ic { background: var(--src-mic); color: #fff; }
+.path-card--upload .path-card__ic { background: var(--fs-surface-3); color: var(--fs-ink-secondary); }
+.path-card__t b { display: block; font-size: var(--fs-text-md); font-weight: 600; }
+.path-card__t span { font-size: var(--fs-text-sm); color: var(--fs-ink-secondary); }
+
+/* ---------- pre-record setup deck ---------- */
+.setup { padding: 18px 18px 24px; display: flex; flex-direction: column; gap: 14px; }
+.setup__head { display: flex; align-items: center; gap: 12px; }
+.setup__head .mic-badge { width: 40px; height: 40px; border-radius: 11px; flex: none; display: grid; place-items: center; background: var(--src-mic-soft); color: var(--src-mic); }
+.setup__head h2 { font-size: var(--fs-text-xl); font-weight: 600; letter-spacing: -0.02em; margin: 0; }
+.setup__head p { font-size: var(--fs-text-sm); color: var(--fs-ink-secondary); margin: 2px 0 0; }
+
+/* active-input label (mobile shows the live device, not a chooser — iOS routes) */
+.active-input { display: flex; align-items: center; gap: 11px; padding: 13px 14px; border: 1px solid var(--fs-border); border-radius: var(--fs-radius); background: var(--fs-surface); }
+.active-input__ic { color: var(--fs-ink-secondary); flex: none; }
+.active-input__body { flex: 1; min-width: 0; }
+.active-input__body b { font-size: var(--fs-text-sm); font-weight: 600; display: block; }
+.active-input__body span { font-family: var(--fs-font-mono); font-size: 11px; color: var(--fs-ink-muted); }
+.active-input__note { font-family: var(--fs-font-sans); font-size: 11px; color: var(--fs-ink-muted); flex: none; max-width: 12ch; text-align: right; line-height: 1.3; }
+
+/* level test block (reuses .lvl / .lvl-wrap from dual.css) */
+.setup-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 14px 0; border-top: 1px solid var(--fs-border); }
+.setup-row__t { font-size: var(--fs-text-md); font-weight: 600; }
+.setup-row__d { font-size: 12px; color: var(--fs-ink-secondary); margin-top: 3px; max-width: 36ch; line-height: 1.4; }
+.setup-row__d .dflt { font-family: var(--fs-font-mono); font-size: 10px; color: var(--fs-ink-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-left: 4px; }
+
+/* the big Record control (bottom-pinned) */
+.rec-deck { flex: none; padding: 14px 18px; border-top: 1px solid var(--fs-border); background: var(--fs-surface); }
+.rec-btn-big {
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  width: 100%; min-height: 60px; border-radius: var(--fs-radius-lg);
+  background: var(--fs-accent); color: var(--fs-accent-ink);
+  font-family: var(--fs-font-sans); font-weight: 600; font-size: 19px; border: none; cursor: pointer;
+}
+.rec-btn-big .dot { width: 17px; height: 17px; border-radius: 50%; background: currentColor; }
+.rec-btn-big--stop { background: var(--fs-ink); color: var(--fs-surface); }
+.rec-btn-big--stop .dot { border-radius: 4px; }
+.rec-btn-big:disabled { opacity: 0.5; }
+
+/* ---------- iOS permission help (denied) ---------- */
+.ios-help { display: flex; flex-direction: column; gap: 7px; margin: 4px 0 18px; }
+.ios-help__step { display: flex; align-items: center; gap: 11px; padding: 12px 14px; border: 1px solid var(--fs-border); border-radius: var(--fs-radius); background: var(--fs-surface); font-size: var(--fs-text-sm); }
+.ios-help__n { width: 22px; height: 22px; border-radius: 50%; flex: none; display: grid; place-items: center; background: var(--fs-ink); color: var(--fs-bg); font-family: var(--fs-font-mono); font-size: 11px; font-weight: 600; }
+.ios-help__step .ios-chip { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fs-ink-secondary); background: var(--fs-surface-3); padding: 4px 9px; border-radius: var(--fs-radius-sm); }
+
+/* ---------- RECORDING-IN-PROGRESS composition ----------
+   The central design question: controls + live transcript on ONE phone
+   viewport. Solution: a pinned control deck on top (timer + level + stop +
+   wake-lock), and the live transcript scrolls UNDER it. Source is fixed
+   Host mic, so there is no source switcher and no tx/tl toggle here —
+   translation is viewed later in the meeting viewer. */
+.live { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.live__deck { flex: none; background: var(--fs-surface); border-bottom: 1px solid var(--fs-border); padding: 14px 18px 14px; }
+.live__statusline { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.live__rec { display: inline-flex; align-items: center; gap: 8px; font-family: var(--fs-font-mono); font-size: 12px; font-weight: 600; letter-spacing: 0.04em; color: var(--fs-accent); }
+.live__rec i { width: 9px; height: 9px; border-radius: 50%; background: var(--fs-accent); box-shadow: 0 0 0 0 var(--fs-accent-ring); animation: m-pulse 1.8s var(--fs-ease) infinite; }
+.live__src { font-family: var(--fs-font-mono); font-size: 11px; color: var(--fs-ink-muted); display: inline-flex; align-items: center; gap: 6px; }
+.live__timer { font-family: var(--fs-font-mono); font-size: 38px; font-weight: 500; letter-spacing: -0.01em; line-height: 1; font-variant-numeric: tabular-nums; }
+.live__meterrow { display: flex; align-items: center; gap: 14px; margin-top: 14px; }
+.live__meter { flex: 1; display: flex; align-items: center; gap: 3px; height: 30px; }
+.live__meter i { flex: 1; border-radius: 2px; background: var(--src-mic); transform-origin: center; }
+.live__meter i.is-off { opacity: 0.16; }
+.live__stop { flex: none; }
+.btn-stop {
+  display: inline-flex; align-items: center; gap: 9px; padding: 11px 20px; min-height: 46px;
+  border-radius: var(--fs-radius); background: var(--fs-ink); color: var(--fs-surface);
+  font-family: var(--fs-font-sans); font-weight: 600; font-size: var(--fs-text-md); border: none; cursor: pointer;
+}
+.btn-stop .sq { width: 12px; height: 12px; border-radius: 3px; background: currentColor; }
+
+/* wake-lock indicator — screen stays on */
+.wakelock { display: inline-flex; align-items: center; gap: 7px; margin-top: 12px; font-size: 12px; color: var(--fs-ink-secondary); }
+.wakelock svg { width: 14px; height: 14px; color: var(--fs-success); flex: none; }
+
+/* the transcript scroll region under the deck */
+.live__streamhead { display: flex; align-items: center; justify-content: space-between; padding: 12px 18px 4px; }
+.live__streamhead b { font-size: var(--fs-text-sm); font-weight: 600; }
+.live__streamhead .auto { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--fs-ink-secondary); }
+.live__stream { flex: 1; min-height: 0; overflow: hidden; padding: 0 18px; }
+
+/* mid-session banner (sits between deck and stream) */
+.live__banner { margin: 0 18px 6px; }
+
+/* ---------- stop → done hand-off ---------- */
+.done-sheet { text-align: center; padding: 6px 22px 14px; }
+.done-sheet__ic { width: 50px; height: 50px; border-radius: 50%; margin: 6px auto 14px; display: grid; place-items: center; background: var(--fs-success-soft); color: var(--fs-success); }
+.done-sheet h3 { font-size: var(--fs-text-lg); font-weight: 600; margin: 0 0 6px; }
+.done-sheet p { font-size: var(--fs-text-sm); color: var(--fs-ink-secondary); margin: 0 0 18px; line-height: 1.5; }
+.done-sheet__meta { display: flex; justify-content: center; gap: 18px; margin-bottom: 18px; }
+.done-sheet__meta div { text-align: center; }
+.done-sheet__meta b { display: block; font-family: var(--fs-font-mono); font-size: 19px; font-weight: 600; }
+.done-sheet__meta span { font-size: 11px; color: var(--fs-ink-muted); }
+.done-sheet__actions { display: flex; flex-direction: column; gap: 9px; }
+
+/* ---------- PWA asset plates (design canvas only — not used in the live app) ---------- */
+.pwa-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+.icon-plate { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 18px; border: 1px solid var(--fs-border); border-radius: var(--fs-radius-lg); background: var(--fs-surface); }
+.icon-plate__art { position: relative; }
+.icon-plate__cap { text-align: center; }
+.icon-plate__cap b { font-size: var(--fs-text-sm); font-weight: 600; display: block; }
+.icon-plate__cap span { font-family: var(--fs-font-mono); font-size: 11px; color: var(--fs-ink-muted); }
+.maskable-ring { position: absolute; inset: 0; border-radius: 50%; border: 2px dashed var(--fs-accent); opacity: 0.65; }
+.maskable-cap { font-family: var(--fs-font-mono); font-size: 10px; color: var(--fs-accent); }
+.splash { width: 220px; height: 440px; border-radius: 30px; background: var(--fs-bg); border: 6px solid #000; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; position: relative; overflow: hidden; }
+.splash__mark { width: 76px; height: 76px; }
+.splash__word { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; }
+.splash__spin { position: absolute; bottom: 46px; width: 22px; height: 22px; border: 2.5px solid var(--fs-border-strong); border-top-color: var(--fs-accent); border-radius: 50%; animation: fs-spin 0.8s linear infinite; }
+
+/* ---------- "Add to Home Screen" coachmark (iOS — Safari has no install prompt) ---------- */
+.a2hs { position: fixed; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); z-index: 70; display: flex; align-items: center; gap: 12px; padding: 13px 15px; border-radius: var(--fs-radius-lg); background: var(--fs-ink); color: var(--fs-bg); box-shadow: var(--fs-shadow-lg); }
+.a2hs__body { flex: 1; font-size: var(--fs-text-sm); line-height: 1.4; }
+.a2hs__body b { font-weight: 600; }
+.a2hs__x { flex: none; background: none; border: none; color: var(--fs-bg); opacity: 0.7; font-size: 18px; cursor: pointer; padding: 2px 6px; }

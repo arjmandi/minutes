@@ -134,3 +134,17 @@ async def require_device(
     if user is None or not user.is_active:
         raise HTTPException(status_code=401, detail="no such user")
     return user
+
+
+async def require_user_or_device(
+    request: Request, authorization: str | None = Header(default=None)
+) -> User:
+    """Accept a web session cookie (the SPA / installed PWA) OR a device bearer token (the
+    extension). Lets the web app mint a capture token from its existing cookie session — the safer
+    path (no long-lived bearer in JS) — while the extension keeps using its device token."""
+    if request.cookies.get(SESSION_COOKIE):
+        try:
+            return await require_user(request)
+        except HTTPException:
+            pass  # cookie present but invalid -> fall through to the device path
+    return await require_device(request, authorization)
