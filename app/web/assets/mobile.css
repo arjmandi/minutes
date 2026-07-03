@@ -149,3 +149,26 @@
 .mtab.is-selected { color: var(--fs-ink); }
 .mtab.is-selected::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--fs-accent); border-radius: 2px; }
 .mtab + .mtab { margin-left: 14px; }
+
+/* ============================================================
+   Installed-PWA safe areas (iOS standalone / Add-to-Home-Screen)
+   ------------------------------------------------------------
+   index.html declares viewport-fit=cover + apple-mobile-web-app-status-bar-style
+   black-translucent, so once installed the web view renders EDGE-TO-EDGE: content
+   sits behind the status bar (top) and the home indicator (bottom). In a normal
+   browser tab env(safe-area-inset-*) is 0, so these rules are no-ops until the app
+   is added to the home screen. Each view's top bar grows by the top inset (its own
+   surface background fills behind the status bar); scroll regions + bottom-pinned
+   decks clear the home indicator. (.a2hs in recordflow.css already insets itself.)
+   ============================================================ */
+/* list view topbar (brand + account/settings avatar — the tap targets that were
+   hidden under the clock/battery) */
+.mtop { height: calc(54px + env(safe-area-inset-top)); padding-top: env(safe-area-inset-top); }
+/* meeting-detail + new-recording header (back / title / ⋮ menu / Transcript·Translation tabs) */
+.mdhead { padding-top: env(safe-area-inset-top); }
+/* settings view: its header scrolls at the very top, so inset the content itself */
+.msettings { padding-top: calc(6px + env(safe-area-inset-top)); }
+/* every scroll region clears the home indicator so the last row is reachable */
+.mob__scroll { padding-bottom: env(safe-area-inset-bottom); }
+/* live-interim footer sits directly on the home indicator */
+.minterim { padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
