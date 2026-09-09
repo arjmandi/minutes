@@ -92,7 +92,7 @@ def test_translation_seeded_from_defaults_and_auto_translated():
         _capture(c, cap, ext, frames=2)  # session auto-translates to de (no key -> dev fake)
 
         meeting = next(
-            m for m in c.get("/api/meetings").json() if m["external_meeting_id"] == ext
+            m for m in c.get("/api/meetings").json()["items"] if m["external_meeting_id"] == ext
         )
         assert meeting["translation"]["enabled"] is True
         assert meeting["translation"]["output_language"] == "de"
@@ -117,7 +117,7 @@ def test_config_endpoint_and_on_demand_requires_key():
         _capture(c, cap, ext, frames=2)
 
         meeting = next(
-            m for m in c.get("/api/meetings").json() if m["external_meeting_id"] == ext
+            m for m in c.get("/api/meetings").json()["items"] if m["external_meeting_id"] == ext
         )
         mid = meeting["id"]
         assert meeting["translation"]["enabled"] is False  # not seeded (user had no defaults)
@@ -231,5 +231,6 @@ def test_web_capture_token_creates_named_web_meeting():
             json={"platform": "web", "external_meeting_id": ext, "title": "My YouTube Video"},
         )
         assert r.status_code == 200 and r.json()["scope"] == f"web:{ext}"
-        m = next(x for x in c.get("/api/meetings").json() if x["external_meeting_id"] == ext)
+        listed = c.get("/api/meetings").json()["items"]
+        m = next(x for x in listed if x["external_meeting_id"] == ext)
         assert m["platform"] == "web" and m["title"] == "My YouTube Video"

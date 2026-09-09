@@ -11,7 +11,7 @@ Once a meeting is being captured, everything happens in the minutes web app. Thi
 
 Open the app and you get a single screen split into three columns (on a phone they collapse into one view at a time — see [On your phone](/users/web-app#on-your-phone)):
 
-- **Transcriptions** (left) — every meeting you own, newest first. Click one to open it; the **⟳** button reloads the list. (Admins see everyone's.)
+- **Transcriptions** (left) — every meeting you own, newest first, grouped by date. Click one to open it; the **⟳** button reloads the list. (Admins see everyone's.) See [Finding an older transcription](#finding-an-older-transcription) once the list gets long.
 - **Transcript** (middle) — the spoken words, line by line, as they're recognised.
 - **Translation** (right) — the translated text for each line, lined up next to the original.
 
@@ -77,6 +77,19 @@ This is the way to translate lines from before you turned translation on, or to 
 If a line can't be translated — a network hiccup, a quota limit, an Anthropic error — that row shows **translation failed** with a **retry** link. Click **retry** to try that single line again. Nothing else is affected, and the rest of the transcript keeps flowing normally.
 
 If on-demand translation reports that translation is unavailable, it usually means there's no Anthropic key on the account — add one under **Settings → API keys** and try again.
+
+## Finding an older transcription
+
+The list loads the most recent meetings first and then keeps going as you scroll — there is no cut-off, so your whole history is reachable.
+
+- **Scroll** the list. As you approach the bottom the next batch loads on its own; a **Load older** button sits at the end of what is loaded, in case you would rather click than scroll. When you reach the beginning of your history the list says so.
+- **Date headers** — **Today**, **Yesterday**, **Earlier this week**, then one per month (**August**, **July**, … with the year added once it isn't this one) — mark where you are as you scroll, so you can aim for roughly the right time instead of reading every row.
+- **Search** with the box above the list. It searches **titles** across your entire history — not only the meetings currently loaded — so it is the fastest way to a specific old meeting. Press **Enter** to search at once, or **Esc** to clear it. The line under the box counts the matches.
+- The count under the search box (**"158 transcriptions"**) is your full total, so you can always see how much history there is.
+
+:::note What search looks at
+Search matches a meeting's **title** (and its internal meeting id) — it does not search *inside* transcripts. So [rename a meeting](#rename-a-meeting) to something you will recognise later and it stays easy to find. If nothing matches, try a shorter word, or clear the search and browse by date.
+:::
 
 ## Rename a meeting
 

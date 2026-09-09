@@ -106,6 +106,11 @@ class Meeting(Base):
     __tablename__ = "meetings"
     __table_args__ = (
         UniqueConstraint("platform", "external_meeting_id", name="uq_meeting_identity"),
+        # The meeting list is keyset-paginated by (created_at, id) DESC. Plain ASCENDING indexes
+        # serve that: the whole ORDER BY is uniformly descending, so Postgres scans the btree
+        # backwards. Owner-scoped list first (the normal case), then the admin "all meetings" one.
+        Index("ix_meetings_owner_created", "owner_id", "created_at", "id"),
+        Index("ix_meetings_created", "created_at", "id"),
     )
 
     id: Mapped[uuid.UUID] = _uuid_col()

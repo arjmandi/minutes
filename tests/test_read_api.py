@@ -79,7 +79,7 @@ def test_transcript_read_authz_and_translations():
         admin_email = f"admin-{uuid.uuid4().hex[:8]}@test.io"
         _make_user(admin_email, admin=True)
         _login(client, admin_email)
-        meetings = client.get("/api/meetings").json()
+        meetings = client.get("/api/meetings").json()["items"]
         meeting = next(m for m in meetings if m["external_meeting_id"] == ext)
 
         resp = client.get(f"/api/meetings/{meeting['id']}/transcript")
@@ -99,5 +99,5 @@ def test_transcript_read_authz_and_translations():
         _login(client, other_email)
         forbidden = client.get(f"/api/meetings/{meeting['id']}/transcript")
         assert forbidden.status_code == 404  # owner-scoped -> 404, no existence leak
-        listed = client.get("/api/meetings").json()
+        listed = client.get("/api/meetings").json()["items"]
         assert all(m["external_meeting_id"] != ext for m in listed)

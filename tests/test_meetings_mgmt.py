@@ -81,7 +81,7 @@ def test_rename_and_export():
 
         ext = f"mm-mtg-{uuid.uuid4().hex[:8]}"
         _capture(c, email, ext, frames=2)
-        meetings = c.get("/api/meetings").json()
+        meetings = c.get("/api/meetings").json()["items"]
         mid = next(m for m in meetings if m["external_meeting_id"] == ext)["id"]
 
         # Rename

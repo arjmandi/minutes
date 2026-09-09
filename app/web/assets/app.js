@@ -90,8 +90,20 @@ const platformBadge = (p) => {
 
 // ---------- state ----------
 let me = null;
-let meetings = [];
 let selId = null;
+// Transcriptions list: /api/meetings serves ONE keyset page at a time, so `meetings` is the pages
+// loaded so far (newest first) rather than "everything". `listCursor` is the way further back —
+// null means we have reached the end of the history. Search runs on the server, over the whole
+// history, not over the loaded pages.
+const LIST_PAGE = 30;
+let meetings = [];
+let listCursor = null;
+let listTotal = 0;
+let listQuery = "";
+let listLoading = false;
+let listError = false;
+let listSeq = 0;        // supersedes in-flight first-page loads (search races)
+let searchTimer = null;
 let ws = null;
 const segOrder = []; // segment ids in display order for the open meeting
 // Dual-source: lines are tagged data-source and shown/hidden by CSS on the selected source — no
@@ -161,7 +173,14 @@ function renderApp() {
           <button class="fs-btn fs-btn--sm fs-btn--primary" id="recordbtn" title="Record with your microphone"><span style="display:inline-flex;align-items:center;justify-content:center;gap:7px"><span style="width:9px;height:9px;border-radius:50%;background:currentColor"></span>Record</span></button>
           <button class="fs-btn fs-btn--sm fs-btn--ghost" id="uploadbtn" title="Upload audio">↑ Upload</button>
         </div>
-        <div class="m-col__scroll" id="meetinglist"></div>
+        <div class="m-listtools">
+          <label class="m-search">${SEARCH_ICON}
+            <input class="fs-input m-search__input" id="listsearch" type="search" autocomplete="off"
+                   placeholder="Search transcriptions" aria-label="Search transcriptions" />
+          </label>
+          <div class="m-listcount" id="listcount"></div>
+        </div>
+        <div class="m-col__scroll" id="meetinglist"><div id="listrows"></div><div id="listfoot"></div></div>
         <input type="file" id="fileinput" accept="audio/*,video/*" style="display:none" />
       </div>
       <div class="m-col m-col--mid">
@@ -179,6 +198,7 @@ function renderApp() {
   root.querySelector("#fileinput").onchange = onUpload;
   root.querySelector("#reloadbtn").onclick = reloadMeetings;
   root.querySelector("#recordbtn").onclick = openRecordDialog;
+  wireListSearch(DESKTOP_LIST);
   renderMeetingList();
   if (selId) {
     const m = meetings.find((x) => x.id === selId);
@@ -201,26 +221,278 @@ function openAccountMenu() {
   }), 0);
 }
 
-// ============================================================ MEETING LIST
-function renderMeetingList() {
-  const list = root.querySelector("#meetinglist");
-  if (!list) return;
-  if (!meetings.length) {
-    list.innerHTML = `<div class="m-empty" style="padding:24px"><div class="m-empty__sub">No transcriptions yet. Capture a tab with the extension, or upload audio.</div></div>`;
-    return;
-  }
-  list.innerHTML = "";
-  for (const m of meetings) {
-    const row = node(`<div class="m-meeting ${m.id === selId ? "is-selected" : ""}" data-id="${m.id}">
+// ============================================================ MEETING LIST (paged + searchable)
+// The history is longer than one page, so the list is three things working together: keyset paging
+// (scroll, or the button, loads the next page and appends it), server-side search (reaches the
+// whole history, not just what is loaded), and date group headers (so "older" is a place you can
+// aim for instead of a wall of identical rows).
+//
+// One engine, two shells: the specs below differ only in markup and container ids.
+
+const SEARCH_ICON = `<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="6.8" cy="6.8" r="4.3"/><path d="m10.2 10.2 3.3 3.3"/></svg>`;
+
+const listTitle = (m) => m.title || m.external_meeting_id;
+
+const dayKey = (d) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+function groupLabel(iso) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "Earlier";
+  const now = new Date();
+  if (dayKey(d) === dayKey(now)) return "Today";
+  const yest = new Date(now);
+  yest.setDate(now.getDate() - 1);
+  if (dayKey(d) === dayKey(yest)) return "Yesterday";
+  const weekAgo = new Date(now);
+  weekAgo.setDate(now.getDate() - 7);
+  if (d >= weekAgo) return "Earlier this week";
+  // Older than a week: by month, with the year once it is not this one.
+  const fmt = d.getFullYear() === now.getFullYear() ? { month: "long" } : { month: "long", year: "numeric" };
+  return d.toLocaleDateString([], fmt);
+}
+
+function listCountLabel() {
+  const n = listTotal;
+  if (listQuery) return n === 1 ? "1 match" : `${n} matches`;
+  return n === 1 ? "1 transcription" : `${n} transcriptions`;
+}
+
+// The bottom of the list: what happens next. Scrolling is the fast path (see watchListScroll), but
+// the button is not decoration — it is what a keyboard user gets, and what still works if a page
+// does not fill the scroller, so there is always a way forward that does not require scrolling.
+function listFootHtml() {
+  if (listLoading && meetings.length) return `<div class="m-listfoot"><span class="m-listfoot__spin"></span>Loading older…</div>`;
+  if (listCursor) return `<div class="m-listfoot"><button class="fs-btn fs-btn--sm fs-btn--ghost" id="loadmore">Load older</button></div>`;
+  if (meetings.length > LIST_PAGE) return `<div class="m-listfoot m-listfoot--end">${meetings.length} shown · end of ${listQuery ? "matches" : "history"}</div>`;
+  return "";
+}
+
+const emptyListSub = () =>
+  listError
+    ? "Could not load your transcriptions. Check your connection and reload."
+    : listQuery
+      ? `Nothing matches “${esc(listQuery)}”. Search covers titles — try a shorter word, or clear the search to browse by date.`
+      : "No transcriptions yet. Capture a tab with the extension, or upload audio.";
+
+const DESKTOP_LIST = {
+  scroller: "#meetinglist",
+  rows: "#listrows",
+  foot: "#listfoot",
+  count: "#listcount",
+  search: "#listsearch",
+  group: (label) => `<div class="m-listgroup">${esc(label)}</div>`,
+  row: (m) => `<div class="m-meeting${m.id === selId ? " is-selected" : ""}" data-id="${esc(m.id)}">
       ${platformBadge(m.platform)}
-      <div class="m-meeting__main"><div class="m-meeting__name">${esc(m.title || m.external_meeting_id)}</div>
-      <div class="m-meeting__sub"><span class="m-meeting__status" style="color:var(--fs-ink-muted)"><span class="m-dot m-dot--idle"></span>${esc(m.platform)}</span><span>· ${esc(relTime(m.created_at))}</span></div></div></div>`);
-    row.onclick = () => selectMeeting(m);
-    list.appendChild(row);
+      <div class="m-meeting__main"><div class="m-meeting__name">${esc(listTitle(m))}</div>
+      <div class="m-meeting__sub"><span class="m-meeting__status" style="color:var(--fs-ink-muted)"><span class="m-dot m-dot--idle"></span>${esc(m.platform)}</span><span>· ${esc(relTime(m.created_at))}</span></div></div></div>`,
+  empty: () => `<div class="m-empty" style="padding:24px;height:auto"><div class="m-empty__sub">${emptyListSub()}</div></div>`,
+  open: (m) => selectMeeting(m),
+};
+
+const MOBILE_LIST = {
+  scroller: ".mob__scroll",
+  rows: "#mlistrows",
+  foot: "#mlistfoot",
+  count: "#mlistcount",
+  search: "#msearch",
+  group: (label) => `<div class="mlgroup">${esc(label)}</div>`,
+  row: (m) => `<div class="mrow${m.id === selId ? " is-selected" : ""}" data-id="${esc(m.id)}">
+      <span class="mt-ic mt-ic--${mtClass(m.platform)}">${esc(mtLetter(m.platform))}</span>
+      <div class="mrow__main"><div class="mrow__name">${esc(listTitle(m))}</div>
+        <div class="mrow__sub"><span class="m-dot m-dot--idle"></span>${esc(m.platform)} · ${esc(relTime(m.created_at))}</div></div>
+      ${M_CHEV}</div>`,
+  empty: () => `<div class="m-empty" style="padding:44px 24px;text-align:center;height:auto">
+      ${LOGO(48)}
+      <div class="m-empty__title" style="margin-top:14px">${listQuery ? "No matches" : listError ? "Could not load" : "No transcriptions yet"}</div>
+      <div class="m-empty__sub">${emptyListSub()}</div>
+      ${listQuery || listError ? "" : `<button class="fs-btn fs-btn--primary fs-btn--lg" id="memptyup" style="margin-top:14px">${M_UP} Upload audio</button>`}
+    </div>`,
+  open: (m) => mOpenMeeting(m),
+};
+
+let listPainted = 0; // rows already in the DOM
+let listGroup = null; // the group header currently open, so an append continues the run
+
+const q1 = (sel) => root.querySelector(sel);
+
+// Full repaint of rows + count + footer. Resets the append cursor.
+function paintList(spec) {
+  const rows = q1(spec.rows);
+  if (!rows) return;
+  rows.innerHTML = "";
+  listPainted = 0;
+  listGroup = null;
+  const count = q1(spec.count);
+  if (count) count.textContent = meetings.length || listQuery ? listCountLabel() : "";
+  if (!meetings.length) {
+    rows.innerHTML = spec.empty();
+    const up = rows.querySelector("#memptyup");
+    if (up) up.onclick = () => q1("#mfileinput")?.click();
+  } else {
+    appendListRows(spec);
+  }
+  // Delegated: one handler for the whole list, however many pages deep it goes.
+  rows.onclick = (e) => {
+    const el = e.target.closest("[data-id]");
+    const m = el && meetings.find((x) => x.id === el.dataset.id);
+    if (m) spec.open(m);
+  };
+  paintListFoot(spec);
+  watchListScroll(spec);
+}
+
+// Append-only — paging must not rebuild the rows above it, or the scroll position jumps to the top
+// on every page load, which is exactly the thing infinite scroll is supposed to feel like it isn't.
+function appendListRows(spec) {
+  const rows = q1(spec.rows);
+  if (!rows) return;
+  let html = "";
+  for (const m of meetings.slice(listPainted)) {
+    const label = groupLabel(m.created_at);
+    if (label !== listGroup) {
+      html += spec.group(label);
+      listGroup = label;
+    }
+    html += spec.row(m);
+  }
+  rows.insertAdjacentHTML("beforeend", html);
+  listPainted = meetings.length;
+}
+
+function paintListFoot(spec) {
+  const foot = q1(spec.foot);
+  if (!foot) return;
+  foot.innerHTML = listFootHtml();
+  const btn = foot.querySelector("#loadmore");
+  if (btn) btn.onclick = () => loadMoreAndPaint(spec);
+}
+
+// Auto-load the next page as the scroller nears its end. A plain scroll listener, not an
+// IntersectionObserver sentinel: it re-evaluates on every scroll (so a page that did not fill the
+// scroller cannot leave the sentinel silently on-screen and never re-fire), and it does not depend
+// on the rendering lifecycle. Attached once per scroller node — both shells rebuild that node when
+// they re-render, and the guard keeps a repaint from stacking duplicate listeners on it.
+function watchListScroll(spec) {
+  const scroller = q1(spec.scroller);
+  if (!scroller || scroller.dataset.paged) return;
+  scroller.dataset.paged = "1";
+  scroller.addEventListener(
+    "scroll",
+    () => {
+      if (!listCursor || listLoading) return;
+      const room = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+      if (room < 320) loadMoreAndPaint(spec); // a page ahead of the bottom, so it feels seamless
+    },
+    { passive: true }
+  );
+}
+
+// Selection must not repaint the list — that would throw a long, scrolled list back to the top.
+function markListSelection() {
+  root.querySelectorAll(".m-meeting[data-id], .mrow[data-id]").forEach((el) => {
+    el.classList.toggle("is-selected", el.dataset.id === selId);
+  });
+}
+
+// ---------- list data ----------
+function meetingsPath(cursor) {
+  const p = new URLSearchParams({ limit: String(LIST_PAGE) });
+  if (cursor) p.set("cursor", cursor);
+  if (listQuery) p.set("q", listQuery);
+  return "/meetings?" + p;
+}
+
+// First page of the current query — the reset path (boot, reload, a new search term). `listSeq`
+// makes the newest call win, so a slow response cannot overwrite a search typed after it.
+async function loadMeetings() {
+  const seq = ++listSeq;
+  listLoading = true;
+  try {
+    const page = await api("GET", meetingsPath(null));
+    if (seq !== listSeq) return;
+    meetings = page.items || [];
+    listCursor = page.next_cursor || null;
+    listTotal = page.total ?? meetings.length;
+    listError = false;
+  } catch {
+    if (seq !== listSeq) return;
+    meetings = [];
+    listCursor = null;
+    listTotal = 0;
+    listError = true;
+  } finally {
+    if (seq === listSeq) listLoading = false;
   }
 }
 
+// The next page back, appended. Guarded so a burst of scroll events fetches a page once.
+async function loadMoreAndPaint(spec) {
+  if (!listCursor || listLoading) return;
+  listLoading = true;
+  paintListFoot(spec); // spinner in place of the button
+  try {
+    const page = await api("GET", meetingsPath(listCursor));
+    const known = new Set(meetings.map((m) => m.id));
+    meetings = meetings.concat((page.items || []).filter((m) => !known.has(m.id)));
+    listCursor = page.next_cursor || null; // unchanged on failure -> the button stays, retry works
+  } catch (e) {
+    toast(e.detail || "Could not load older transcriptions", "error");
+  } finally {
+    listLoading = false;
+    appendListRows(spec);
+    paintListFoot(spec);
+  }
+}
+
+// Repaint whichever shell is currently mounted (the other spec's containers are absent, so a
+// mismatched call is a no-op rather than a wrong render).
+const repaintList = () => paintList(isMobile() ? MOBILE_LIST : DESKTOP_LIST);
+
+// Pull the newest page in WITHOUT discarding pages the user already scrolled through (a recording
+// or upload just created a meeting; it belongs at the top, and their scrollback should survive).
+// This one repaints itself: it grows the array at the TOP, and appending would put those rows at
+// the bottom instead — so a full repaint, not an append, is the only correct follow-up.
+async function refreshTopMeetings() {
+  if (meetings.length <= LIST_PAGE) {
+    await loadMeetings(); // nothing paged yet: page 1 IS the list
+  } else {
+    try {
+      const page = await api("GET", meetingsPath(null));
+      const fresh = new Map((page.items || []).map((m) => [m.id, m]));
+      meetings = (page.items || []).concat(meetings.filter((m) => !fresh.has(m.id)));
+      listTotal = page.total ?? listTotal;
+    } catch { /* a background refresh must never blank the list */ }
+  }
+  repaintList();
+}
+
+// Search runs server-side over the whole history, debounced; Enter searches now, Escape clears.
+function wireListSearch(spec) {
+  const input = q1(spec.search);
+  if (!input) return;
+  input.value = listQuery;
+  const run = async (value) => {
+    clearTimeout(searchTimer);
+    listQuery = value.trim();
+    await loadMeetings();
+    paintList(spec);
+  };
+  input.oninput = () => {
+    const value = input.value;
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => run(value), 250);
+  };
+  input.onkeydown = (e) => {
+    if (e.key === "Enter") { e.preventDefault(); run(input.value); }
+    else if (e.key === "Escape" && input.value) { input.value = ""; run(""); }
+  };
+}
+
+function renderMeetingList() {
+  paintList(DESKTOP_LIST);
+}
+
 // Refresh the transcriptions list from the server (the reload button next to the list title).
+// Deliberately a reset, not a merge: the button means "show me the current top of the list".
 async function reloadMeetings() {
   const btn = root.querySelector("#reloadbtn");
   if (btn) btn.classList.add("is-loading");
@@ -235,7 +507,7 @@ async function reloadMeetings() {
 // ============================================================ TRANSCRIPT VIEW
 async function selectMeeting(m) {
   selId = m.id;
-  renderMeetingList();
+  markListSelection();
   if (ws) { ws.close(); ws = null; }
   segOrder.length = 0;
   seenSources.clear();
@@ -601,8 +873,7 @@ async function onUpload(e) {
     const r = await fetch("/api/uploads", { method: "POST", credentials: "include", body: fd });
     if (!r.ok) { let d; try { d = (await r.json()).detail; } catch {} throw new Error(d || "upload failed"); }
     toast("Uploaded — transcription queued", "info");
-    await loadMeetings();
-    renderMeetingList();
+    await refreshTopMeetings();
   } catch (ex) { toast(ex.message || "Upload failed", "error"); }
 }
 
@@ -700,9 +971,11 @@ async function recMintAndStart({ name, aec, silence, onState, onLevel }) {
   return { externalId, title };
 }
 // Poll the meeting list until the recording's meeting appears (the ingest upserts it on `hello`).
+// A merge, not a reload: the new meeting is the newest so page 1 finds it, and any older pages the
+// user had already scrolled to stay loaded underneath.
 async function recFindMeeting(externalId, onFound) {
   for (let i = 0; i < 24 && activeRecorder && !activeRecorder.ended; i++) {
-    await loadMeetings();
+    await refreshTopMeetings();
     const m = meetings.find((x) => x.external_meeting_id === externalId);
     if (m) { onFound(m); return; }
     await new Promise((res) => setTimeout(res, 500));
@@ -741,7 +1014,7 @@ function recDesktopEnd(saved) {
   if (recTimer) { clearInterval(recTimer); recTimer = null; }
   document.getElementById("recbar")?.remove();
   activeRecorder = null;
-  if (saved) { toast("Recording saved", "info"); loadMeetings().then(renderMeetingList); }
+  if (saved) { toast("Recording saved", "info"); refreshTopMeetings(); }
 }
 
 /* ---------- MOBILE: full-screen PWA flow (setup -> live -> done) ---------- */
@@ -906,7 +1179,7 @@ function mRecDone() {
       <div class="done-sheet__actions"><button class="fs-btn fs-btn--primary fs-btn--lg" id="recopen">Open transcript →</button><button class="fs-btn" id="recanother">Record another</button></div>
     </div></div></div></div>`;
   root.querySelector("#recopen").onclick = async () => {
-    await loadMeetings();
+    await refreshTopMeetings();
     const mm = m.id && meetings.find((x) => x.id === m.id);
     if (mm) mOpenMeeting(mm); else { mView = "list"; renderMobileApp(); }
   };
@@ -1072,7 +1345,14 @@ function renderMobileList() {
         <div class="entry-or">or</div>
         <button class="fs-btn fs-btn--lg upload-link" id="muploadlink">${M_UP} Upload audio file</button>
       </div>
-      <div class="mlist" id="mlist"></div>
+      <div class="mlisttools">
+        <label class="msearch">${SEARCH_ICON}
+          <input class="fs-input msearch__input" id="msearch" type="search" autocomplete="off"
+                 placeholder="Search transcriptions" aria-label="Search transcriptions" />
+        </label>
+        <div class="mlistcount" id="mlistcount"></div>
+      </div>
+      <div class="mlist" id="mlist"><div id="mlistrows"></div><div id="mlistfoot"></div></div>
     </div>
   </div>
   <input type="file" id="mfileinput" accept="audio/*,video/*" style="display:none" />`;
@@ -1086,33 +1366,13 @@ function renderMobileList() {
   };
   root.querySelector("#mreccta").onclick = mStartRecordFlow;
   root.querySelector("#muploadlink").onclick = () => root.querySelector("#mfileinput").click();
+  wireListSearch(MOBILE_LIST);
   mRenderList();
   maybeShowA2HS();
 }
 
 function mRenderList() {
-  const list = root.querySelector("#mlist");
-  if (!list) return;
-  if (!meetings.length) {
-    list.innerHTML = `<div class="m-empty" style="padding:48px 24px;text-align:center">
-      ${LOGO(48)}
-      <div class="m-empty__title" style="margin-top:14px">No transcriptions yet</div>
-      <div class="m-empty__sub">Upload an audio file, or capture any tab that plays audio with the minutes browser extension.</div>
-      <button class="fs-btn fs-btn--primary fs-btn--lg" id="memptyup" style="margin-top:14px">${M_UP} Upload audio</button>
-    </div>`;
-    list.querySelector("#memptyup").onclick = () => root.querySelector("#mfileinput").click();
-    return;
-  }
-  list.innerHTML = "";
-  for (const m of meetings) {
-    const row = node(`<div class="mrow ${m.id === selId ? "is-selected" : ""}">
-      <span class="mt-ic mt-ic--${mtClass(m.platform)}">${esc(mtLetter(m.platform))}</span>
-      <div class="mrow__main"><div class="mrow__name">${esc(m.title || m.external_meeting_id)}</div>
-        <div class="mrow__sub"><span class="m-dot m-dot--idle"></span>${esc(m.platform)} · ${esc(relTime(m.created_at))}</div></div>
-      ${M_CHEV}</div>`);
-    row.onclick = () => mOpenMeeting(m);
-    list.appendChild(row);
-  }
+  paintList(MOBILE_LIST);
 }
 
 async function mOpenMeeting(m) {
@@ -1436,9 +1696,6 @@ async function renderShared(token) {
 }
 
 // ============================================================ BOOT
-async function loadMeetings() {
-  meetings = await api("GET", "/meetings").catch(() => []);
-}
 async function start() {
   try { me = await api("GET", "/me", undefined, { noRefresh: false }); }
   catch { me = null; }

@@ -98,7 +98,7 @@ def test_erasure_removes_meeting_and_objects():
         admin_email = f"adm-{uuid.uuid4().hex[:8]}@test.io"
         _make_user(admin_email, admin=True)
         _login(client, admin_email)
-        meetings = client.get("/api/meetings").json()
+        meetings = client.get("/api/meetings").json()["items"]
         meeting = next(m for m in meetings if m["external_meeting_id"] == ext)
         # A non-admin (non-owner) cannot erase it — owner-scoped 404.
         client.post("/api/auth/logout")

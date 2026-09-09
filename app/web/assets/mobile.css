@@ -61,6 +61,30 @@
 .mrow__sub { font-family: var(--fs-font-mono); font-size: 11px; color: var(--fs-ink-muted); margin-top: 3px; display: flex; align-items: center; gap: 6px; }
 .mrow__chev { color: var(--fs-ink-muted); flex: none; }
 
+/* ---------- search + result count above the list ---------- */
+/* Sticky, because the list it filters is now arbitrarily long: search has to stay reachable from
+   300 rows down, not only from the top. --mlisttools-h is this block's own height, and the date
+   headers below dock underneath it — keep the two in step if the padding here changes. */
+.mob { --mlisttools-h: 66px; }
+.mlisttools { position: sticky; top: 0; z-index: 2;
+  padding: 0 16px 6px; display: flex; flex-direction: column; gap: 7px; background: var(--fs-bg); }
+.msearch { position: relative; display: flex; align-items: center; }
+.msearch > svg { position: absolute; left: 12px; color: var(--fs-ink-muted); pointer-events: none; }
+/* 16px keeps iOS Safari from zooming the viewport when the field takes focus. */
+.msearch__input { padding-left: 36px; min-height: 42px; font-size: 16px; border-radius: var(--fs-radius-pill); }
+.mlistcount { font-family: var(--fs-font-mono); font-size: 11px; color: var(--fs-ink-muted); padding: 0 4px; min-height: 13px; }
+
+/* ---------- date group headers (sticky under the list's own scroller) ---------- */
+.mlgroup {
+  position: sticky; top: var(--mlisttools-h); z-index: 1;
+  font-family: var(--fs-font-mono); font-size: 10px; font-weight: 500; letter-spacing: 0.07em;
+  text-transform: uppercase; color: var(--fs-ink-muted);
+  padding: 12px 12px 6px; background: var(--fs-bg);
+}
+.mlgroup:first-child { padding-top: 2px; }
+/* A row that opens a new date group is separated by the header, not by its own hairline. */
+.mlgroup + .mrow { border-top: none; }
+
 /* ---------- meeting detail ---------- */
 .mdhead { flex: none; background: var(--fs-surface); border-bottom: 1px solid var(--fs-border); }
 .mdhead__top { display: flex; align-items: center; gap: 6px; padding: 8px 8px 8px 6px; }

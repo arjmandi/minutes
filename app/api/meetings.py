@@ -1,6 +1,6 @@
 """Read API + live fan-out (spec v3 §12), owner-scoped to the signed-in user.
 
-- GET /meetings — meetings the user owns (admin: all).
+- GET /meetings — one page of the meetings the user owns (admin: all), newest first.
 - GET /meetings/{id}/transcript?after=<seq> — durable final segments + translations, ordered.
 - WS  /meetings/{id}/live — relays interim/final/translation events (session-cookie authed).
 - POST /consent, DELETE /{id} — owner-or-admin.
@@ -12,6 +12,8 @@ tokens — the extension mints one via /api/capture/token, which also claims the
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import re
 import uuid
 from datetime import datetime, timedelta
@@ -120,11 +122,83 @@ def _segment_dict(seg, joined_at: datetime, source: CaptureSource = CaptureSourc
     }
 
 
+# Meeting-list paging. The default page is what the sidebar shows before the user scrolls; the
+# max is a guard on a hand-rolled `?limit=`, not a UI value.
+LIST_LIMIT_DEFAULT = 50
+LIST_LIMIT_MAX = 200
+
+
+def _encode_cursor(m: Meeting) -> str:
+    """Opaque cursor = the keyset position of a row: its (created_at, id).
+
+    Deliberately NOT signed: it only picks a starting point *inside* a query that is already
+    owner-scoped server-side, so a forged cursor can at worst re-window the caller's own rows.
+    """
+    raw = f"{m.created_at.isoformat()}|{m.id}"
+    return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+
+
+def _decode_cursor(cursor: str) -> tuple[datetime, uuid.UUID]:
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        created_at, sep, meeting_id = base64.urlsafe_b64decode(padded).decode().partition("|")
+        if not sep:
+            raise ValueError("missing separator")
+        return datetime.fromisoformat(created_at), uuid.UUID(meeting_id)
+    except (ValueError, binascii.Error, UnicodeDecodeError) as exc:
+        raise HTTPException(status_code=422, detail="invalid cursor") from exc
+
+
 @router.get("")
-async def list_meetings(request: Request, user: User = Depends(require_user)) -> list[dict]:
+async def list_meetings(
+    request: Request,
+    limit: int = LIST_LIMIT_DEFAULT,
+    cursor: str | None = None,
+    q: str | None = None,
+    user: User = Depends(require_user),
+) -> dict:
+    """One page of the user's meetings, newest first (admin: all).
+
+    Returns ``{items, next_cursor, total}``:
+      - ``limit``  — page size, clamped to 1..``LIST_LIMIT_MAX``.
+      - ``cursor`` — opaque keyset position from a previous page's ``next_cursor``; absent = start
+        at the newest. Keyset, not offset: meetings appear *while* the client pages (a live capture
+        upserts one), and an offset window would then repeat or skip rows. 422 on a malformed one.
+      - ``q``      — case-insensitive substring of the title or external meeting id. The whole
+        history is reachable by paging, but search is how you get to one old meeting directly.
+      - ``next_cursor`` — pass as ``cursor`` for the next page; ``null`` means this was the last
+        one. Derived by over-fetching one row, so a returned cursor never leads to an empty page.
+      - ``total``  — meetings matching ``q``, counted on the FIRST page only (``null`` on
+        cursor-ed pages). The total belongs to the query, not to the page, so the client keeps
+        the one it got when it started; a `q` count has to touch the heap for every candidate
+        title, which is ~100x a page fetch and has no business on the scroll path.
+    """
+    page_size = min(max(limit, 1), LIST_LIMIT_MAX)
+    before = _decode_cursor(cursor) if cursor else None
+    search = q.strip() if q and q.strip() else None
     async with request.app.state.session_factory() as db:
-        meetings = await repo.list_meetings_for_user(db, user_id=user.id, is_admin=user.is_admin)
-    return [_meeting_dict(m) for m in meetings]
+        rows = await repo.list_meetings_for_user(
+            db,
+            user_id=user.id,
+            is_admin=user.is_admin,
+            limit=page_size + 1,  # over-fetch by one: is there a next page?
+            before=before,
+            query=search,
+        )
+        total = (
+            None
+            if before is not None
+            else await repo.count_meetings_for_user(
+                db, user_id=user.id, is_admin=user.is_admin, query=search
+            )
+        )
+    has_more = len(rows) > page_size
+    page = rows[:page_size]
+    return {
+        "items": [_meeting_dict(m) for m in page],
+        "next_cursor": _encode_cursor(page[-1]) if has_more and page else None,
+        "total": total,
+    }
 
 
 @router.get("/{meeting_id}")

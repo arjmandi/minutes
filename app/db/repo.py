@@ -5,8 +5,8 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy import delete as sa_delete
-from sqlalchemy import func, select
 from sqlalchemy import update as sa_update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
@@ -59,14 +59,77 @@ async def upsert_meeting(
     return meeting
 
 
-async def list_meetings_for_user(
-    db: AsyncSession, *, user_id: uuid.UUID, is_admin: bool, limit: int = 100
-) -> list[Meeting]:
-    """Owner-scoped meeting list: a user sees only their own; an admin sees all."""
-    q = select(Meeting).order_by(Meeting.created_at.desc()).limit(limit)
+_LIKE_ESCAPE = "\\"
+
+
+def _ilike_pattern(query: str) -> str:
+    """Wrap a user search string as a case-insensitive LIKE pattern, escaping LIKE wildcards so a
+    literal ``%`` or ``_`` in a meeting title matches itself instead of matching everything."""
+    escaped = query
+    for ch in (_LIKE_ESCAPE, "%", "_"):  # the escape char first, or we'd double-escape our own
+        escaped = escaped.replace(ch, _LIKE_ESCAPE + ch)
+    return f"%{escaped}%"
+
+
+def _scope_meetings(stmt, *, user_id: uuid.UUID, is_admin: bool, query: str | None):
+    """Apply the shared owner scope + search filter, so the page and its total always agree.
+
+    Owner-scoped: a user sees only their own meetings; an admin sees all (unowned included).
+    Search matches the title or the external meeting id; an untitled meeting has a NULL title,
+    which never matches, so it stays findable by its external id alone.
+    """
     if not is_admin:
-        q = q.where(Meeting.owner_id == user_id)
+        stmt = stmt.where(Meeting.owner_id == user_id)
+    if query:
+        pattern = _ilike_pattern(query)
+        stmt = stmt.where(
+            or_(
+                Meeting.title.ilike(pattern, escape=_LIKE_ESCAPE),
+                Meeting.external_meeting_id.ilike(pattern, escape=_LIKE_ESCAPE),
+            )
+        )
+    return stmt
+
+
+async def list_meetings_for_user(
+    db: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    is_admin: bool,
+    limit: int = 50,
+    before: tuple[datetime, uuid.UUID] | None = None,
+    query: str | None = None,
+) -> list[Meeting]:
+    """One page of the owner-scoped meeting list, newest first.
+
+    Keyset ("seek") pagination on ``(created_at, id)``: ``before`` is the last row of the previous
+    page and the next page is everything strictly older than it. OFFSET would skip or repeat rows
+    here — meetings are created *while* the user is paging (a live capture upserts one on `hello`),
+    and every insert shifts the whole offset window by one. ``id`` is the tie-break so the order is
+    total even when two meetings share a created_at; both columns are covered by
+    ``ix_meetings_owner_created`` / ``ix_meetings_created``.
+    """
+    q = _scope_meetings(select(Meeting), user_id=user_id, is_admin=is_admin, query=query)
+    if before is not None:
+        created_at, meeting_id = before
+        q = q.where(
+            or_(
+                Meeting.created_at < created_at,
+                and_(Meeting.created_at == created_at, Meeting.id < meeting_id),
+            )
+        )
+    q = q.order_by(Meeting.created_at.desc(), Meeting.id.desc()).limit(limit)
     return list((await db.execute(q)).scalars())
+
+
+async def count_meetings_for_user(
+    db: AsyncSession, *, user_id: uuid.UUID, is_admin: bool, query: str | None = None
+) -> int:
+    """How many meetings the list query matches in total (drives the list's count line)."""
+    q = _scope_meetings(
+        select(func.count()).select_from(Meeting), user_id=user_id, is_admin=is_admin, query=query
+    )
+    return int((await db.execute(q)).scalar_one())
 
 
 async def create_session(

@@ -133,7 +133,7 @@ A copy only has translated text for lines that were actually translated. Untrans
 
 minutes works in a mobile browser too. On a small screen the three columns collapse into one view at a time:
 
-- Your **Transcriptions** list is the home screen — tap a row to open it, or the **⟳** to refresh.
+- Your **Transcriptions** list is the home screen — tap a row to open it, or the **⟳** to refresh. It is grouped by date and loads older meetings as you scroll; the **search** box stays pinned to the top of the screen while you scroll, so you can jump to an old meeting by name from anywhere in the list. See [Finding an older transcription](/users/meetings-and-export#finding-an-older-transcription).
 - A meeting opens full-screen with a **Transcript / Translation** toggle at the top; tap **‹** to return to the list.
 - When a meeting has **both** audio sources, a row of **source chips** (**Online stream** / **Host mic**, each with its colored mark) sits just above that Transcript / Translation toggle — tap a chip to switch which source you're reading, the same as the desktop switcher. Single-source meetings show no chips.
 - The account menu, a meeting's actions (rename, export, share, delete), and the per-meeting translation settings each slide up as a **bottom sheet**.

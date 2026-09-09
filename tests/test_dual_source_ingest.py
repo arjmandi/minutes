@@ -80,7 +80,8 @@ def test_tab_and_mic_capture_tag_the_transcript():
         _capture(c, cap, ext, source="tab", call_id=f"tab-{uuid.uuid4().hex[:8]}")
         _capture(c, cap, ext, source="mic", call_id=f"mic-{uuid.uuid4().hex[:8]}")
 
-        meeting = next(m for m in c.get("/api/meetings").json() if m["external_meeting_id"] == ext)
+        listed = c.get("/api/meetings").json()["items"]
+        meeting = next(m for m in listed if m["external_meeting_id"] == ext)
         mid = meeting["id"]
         segs = c.get(f"/api/meetings/{mid}/transcript").json()
         assert segs, "both captures should have produced segments"

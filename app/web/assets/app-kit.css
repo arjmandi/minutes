@@ -71,6 +71,36 @@
 .m-meeting__sub { font-family: var(--fs-font-mono); font-size: 11px; color: var(--fs-ink-muted); margin-top: 2px; display: flex; align-items: center; gap: 6px; }
 .m-meeting__status { display: inline-flex; align-items: center; gap: 5px; }
 
+/* ---------- list tools: search + result count (fixed above the scroller) ---------- */
+.m-listtools { flex: none; padding: 6px 12px 8px; display: flex; flex-direction: column; gap: 6px; }
+.m-search { position: relative; display: flex; align-items: center; }
+.m-search > svg { position: absolute; left: 10px; color: var(--fs-ink-muted); pointer-events: none; }
+.m-search__input { padding-left: 31px; min-height: 34px; font-size: var(--fs-text-sm); }
+/* The stock WebKit clear affordance is the right one here — just tint it to the palette. */
+.m-search__input::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; width: 13px; height: 13px; cursor: pointer;
+  background: var(--fs-ink-muted); border-radius: 50%;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 3l6 6M9 3l-6 6' stroke='black' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E") center/10px no-repeat; }
+.m-listcount { font-family: var(--fs-font-mono); font-size: 11px; color: var(--fs-ink-muted); padding: 0 2px; min-height: 13px; }
+
+/* ---------- date group headers ---------- */
+/* Sticky: while you scroll a long history, the bucket you are inside stays named. */
+.m-listgroup {
+  position: sticky; top: 0; z-index: 1;
+  font-family: var(--fs-font-mono); font-size: 10px; font-weight: 500; letter-spacing: 0.07em;
+  text-transform: uppercase; color: var(--fs-ink-muted);
+  padding: 10px 11px 5px; background: var(--fs-surface);
+}
+.m-listgroup:first-child { padding-top: 4px; }
+
+/* ---------- paging footer (scroll sentinel + explicit control) ---------- */
+.m-listfoot { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 10px 8px 16px;
+  font-family: var(--fs-font-mono); font-size: 11px; color: var(--fs-ink-muted); }
+.m-listfoot--end { opacity: 0.7; }
+.m-listfoot__spin { width: 12px; height: 12px; border-radius: 50%; flex: none;
+  border: 2px solid var(--fs-border-strong); border-top-color: var(--fs-accent);
+  animation: m-listspin 0.7s linear infinite; }
+@keyframes m-listspin { to { transform: rotate(360deg); } }
+
 /* ---------- transcript / translation line ---------- */
 .m-stream { display: flex; flex-direction: column; }
 .m-line {

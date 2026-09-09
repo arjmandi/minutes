@@ -58,7 +58,8 @@ def _capture(c: TestClient, email: str, ext: str, frames: int = 2) -> str:
             ws.send_bytes(encode_frame(i, i * 20, b"\x00\x00" * 160))
         ws.send_json({"type": "end"})
         assert ws.receive_json()["type"] == "ended"
-    return next(m for m in c.get("/api/meetings").json() if m["external_meeting_id"] == ext)["id"]
+    listed = c.get("/api/meetings").json()["items"]
+    return next(m for m in listed if m["external_meeting_id"] == ext)["id"]
 
 
 def test_share_anonymous_read_rotate_disable():
