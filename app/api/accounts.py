@@ -94,12 +94,22 @@ def _user_public(user: User) -> dict:
 def _set_web_cookies(response: Response, access: str, refresh: str, settings) -> None:
     secure = settings.app_env not in DEV_ENVS
     response.set_cookie(
-        SESSION_COOKIE, access, max_age=settings.session_ttl_s,
-        httponly=True, secure=secure, samesite="lax", path="/",
+        SESSION_COOKIE,
+        access,
+        max_age=settings.session_ttl_s,
+        httponly=True,
+        secure=secure,
+        samesite="lax",
+        path="/",
     )
     response.set_cookie(
-        REFRESH_COOKIE, refresh, max_age=settings.refresh_ttl_s,
-        httponly=True, secure=secure, samesite="lax", path="/",
+        REFRESH_COOKIE,
+        refresh,
+        max_age=settings.refresh_ttl_s,
+        httponly=True,
+        secure=secure,
+        samesite="lax",
+        path="/",
     )
 
 
@@ -123,22 +133,31 @@ async def login(body: LoginBody, request: Request, response: Response) -> dict:
             raw = new_opaque_token()
             expires = datetime.now(UTC) + timedelta(seconds=settings.device_token_ttl_s)
             await repo.create_auth_token(
-                db, user_id=user.id, kind=TokenKind.device,
-                token_hash=hash_token(raw), expires_at=expires,
+                db,
+                user_id=user.id,
+                kind=TokenKind.device,
+                token_hash=hash_token(raw),
+                expires_at=expires,
             )
             await db.commit()
             return {"device_token": raw, "expires_at": expires.isoformat(), "email": user.email}
         # web: short access JWT + rotated, DB-backed refresh token, both in HttpOnly cookies
         access = issue_access_token(
-            user_id=str(user.id), is_admin=user.is_admin, token_version=user.token_version,
-            secret=settings.auth_secret, algorithm=settings.auth_algorithm,
+            user_id=str(user.id),
+            is_admin=user.is_admin,
+            token_version=user.token_version,
+            secret=settings.auth_secret,
+            algorithm=settings.auth_algorithm,
             ttl_s=settings.session_ttl_s,
         )
         raw_refresh = new_opaque_token()
         expires = datetime.now(UTC) + timedelta(seconds=settings.refresh_ttl_s)
         await repo.create_auth_token(
-            db, user_id=user.id, kind=TokenKind.web_refresh,
-            token_hash=hash_token(raw_refresh), expires_at=expires,
+            db,
+            user_id=user.id,
+            kind=TokenKind.web_refresh,
+            token_hash=hash_token(raw_refresh),
+            expires_at=expires,
         )
         await db.commit()
         public = _user_public(user)
@@ -162,9 +181,7 @@ async def refresh(request: Request, response: Response) -> dict:
             # whole web-session family (RFC 9700 rotation hardening).
             stale = await repo.get_auth_token_any(db, token_hash=token_hash)
             if stale is not None and stale.kind == TokenKind.web_refresh:
-                await repo.revoke_user_tokens(
-                    db, user_id=stale.user_id, kind=TokenKind.web_refresh
-                )
+                await repo.revoke_user_tokens(db, user_id=stale.user_id, kind=TokenKind.web_refresh)
                 await db.commit()
                 log.warning("auth.refresh_reuse", user_id=str(stale.user_id))
             raise HTTPException(status_code=401, detail="invalid session")
@@ -175,12 +192,18 @@ async def refresh(request: Request, response: Response) -> dict:
         new_refresh = new_opaque_token()
         expires = datetime.now(UTC) + timedelta(seconds=settings.refresh_ttl_s)
         await repo.create_auth_token(
-            db, user_id=user.id, kind=TokenKind.web_refresh,
-            token_hash=hash_token(new_refresh), expires_at=expires,
+            db,
+            user_id=user.id,
+            kind=TokenKind.web_refresh,
+            token_hash=hash_token(new_refresh),
+            expires_at=expires,
         )
         access = issue_access_token(
-            user_id=str(user.id), is_admin=user.is_admin, token_version=user.token_version,
-            secret=settings.auth_secret, algorithm=settings.auth_algorithm,
+            user_id=str(user.id),
+            is_admin=user.is_admin,
+            token_version=user.token_version,
+            secret=settings.auth_secret,
+            algorithm=settings.auth_algorithm,
             ttl_s=settings.session_ttl_s,
         )
         await db.commit()
@@ -229,16 +252,21 @@ async def change_password(
         await repo.revoke_user_tokens(db, user_id=user.id)  # revoke all refresh/device tokens
         # Keep THIS caller signed in: fresh access JWT (new version) + fresh refresh token.
         access = issue_access_token(
-            user_id=str(current.id), is_admin=current.is_admin,
+            user_id=str(current.id),
+            is_admin=current.is_admin,
             token_version=current.token_version,
-            secret=settings.auth_secret, algorithm=settings.auth_algorithm,
+            secret=settings.auth_secret,
+            algorithm=settings.auth_algorithm,
             ttl_s=settings.session_ttl_s,
         )
         new_refresh = new_opaque_token()
         expires = datetime.now(UTC) + timedelta(seconds=settings.refresh_ttl_s)
         await repo.create_auth_token(
-            db, user_id=current.id, kind=TokenKind.web_refresh,
-            token_hash=hash_token(new_refresh), expires_at=expires,
+            db,
+            user_id=current.id,
+            kind=TokenKind.web_refresh,
+            token_hash=hash_token(new_refresh),
+            expires_at=expires,
         )
         await db.commit()
     _set_web_cookies(response, access, new_refresh, settings)
@@ -246,9 +274,7 @@ async def change_password(
 
 
 @router.put("/me/keys")
-async def set_keys(
-    body: KeysBody, request: Request, user: User = Depends(require_user)
-) -> dict:
+async def set_keys(body: KeysBody, request: Request, user: User = Depends(require_user)) -> dict:
     settings = request.app.state.settings
     fields = body.model_fields_set
     async with request.app.state.session_factory() as db:
@@ -258,12 +284,14 @@ async def set_keys(
         if "soniox_key" in fields:
             current.soniox_key_enc = (
                 crypto.encrypt(body.soniox_key, secret=settings.secret_key, aad=str(current.id))
-                if body.soniox_key else None
+                if body.soniox_key
+                else None
             )
         if "anthropic_key" in fields:
             current.anthropic_key_enc = (
                 crypto.encrypt(body.anthropic_key, secret=settings.secret_key, aad=str(current.id))
-                if body.anthropic_key else None
+                if body.anthropic_key
+                else None
             )
         if "soniox_region" in fields:
             current.soniox_region = body.soniox_region

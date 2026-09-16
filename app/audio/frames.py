@@ -29,9 +29,7 @@ class PcmFrame:
 
 
 def encode_frame(seq: int, ts_ms: int, pcm: bytes, *, gap: bool = False) -> bytes:
-    header = _HEADER.pack(
-        seq & 0xFFFFFFFF, ts_ms & 0xFFFFFFFFFFFFFFFF, _FLAG_GAP if gap else 0
-    )
+    header = _HEADER.pack(seq & 0xFFFFFFFF, ts_ms & 0xFFFFFFFFFFFFFFFF, _FLAG_GAP if gap else 0)
     return header + pcm
 
 

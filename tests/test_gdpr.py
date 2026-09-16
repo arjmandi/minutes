@@ -36,8 +36,11 @@ def _token_for(principal: str) -> str:
     """A capability token bound to a specific principal (for the owner-binding ingest gate)."""
     s = get_settings()
     return issue_capability_token(
-        principal=principal, secret=s.auth_secret, algorithm=s.auth_algorithm,
-        ttl_s=60, meetings=["*"],
+        principal=principal,
+        secret=s.auth_secret,
+        algorithm=s.auth_algorithm,
+        ttl_s=60,
+        meetings=["*"],
     )
 
 

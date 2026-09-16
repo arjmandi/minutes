@@ -510,9 +510,7 @@ async def translate_segment(
                 status_code=422,
                 detail=f"already in {target} — choose a different output language",
             )
-        owner = (
-            await repo.get_user_by_id(db, meeting.owner_id) if meeting.owner_id else None
-        )
+        owner = await repo.get_user_by_id(db, meeting.owner_id) if meeting.owner_id else None
         translator = build_user_translator(
             owner, settings=settings, model=meeting.translation_model
         )

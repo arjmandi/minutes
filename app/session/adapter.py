@@ -70,9 +70,7 @@ class ClientCaptureAdapter:
                 pass
 
     async def events(self) -> AsyncIterator[Event]:
-        yield SessionStarted(
-            self._platform, self._external_meeting_id, self._call_id, self._source
-        )
+        yield SessionStarted(self._platform, self._external_meeting_id, self._call_id, self._source)
         while True:
             item = await self._queue.get()
             if isinstance(item, _End):

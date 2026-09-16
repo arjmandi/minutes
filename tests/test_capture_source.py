@@ -100,17 +100,35 @@ def test_transcript_tags_and_filters_by_source():
         m = await _meeting(db)
         tab = await _sess(db, m, CaptureSource.tab)
         mic = await _sess(db, m, CaptureSource.mic)
-        await repo.upsert_segment(db, meeting_id=m.id, session_id=tab.id, speaker_id="mixed",
-                                  utterance_id="u1", text="they said", language="en",
-                                  start_ms=0, end_ms=20)
-        await repo.upsert_segment(db, meeting_id=m.id, session_id=mic.id, speaker_id="mixed",
-                                  utterance_id="u1", text="i said", language="en",
-                                  start_ms=0, end_ms=20)
+        await repo.upsert_segment(
+            db,
+            meeting_id=m.id,
+            session_id=tab.id,
+            speaker_id="mixed",
+            utterance_id="u1",
+            text="they said",
+            language="en",
+            start_ms=0,
+            end_ms=20,
+        )
+        await repo.upsert_segment(
+            db,
+            meeting_id=m.id,
+            session_id=mic.id,
+            speaker_id="mixed",
+            utterance_id="u1",
+            text="i said",
+            language="en",
+            start_ms=0,
+            end_ms=20,
+        )
         await db.commit()
 
         all_rows = await repo.transcript_for_meeting(db, m.id)
         assert {src: seg.text for seg, _j, src in all_rows} == {
-            CaptureSource.tab: "they said", CaptureSource.mic: "i said"}
+            CaptureSource.tab: "they said",
+            CaptureSource.mic: "i said",
+        }
 
         mic_only = await repo.transcript_for_meeting(db, m.id, source=CaptureSource.mic)
         assert [seg.text for seg, _j, _s in mic_only] == ["i said"]

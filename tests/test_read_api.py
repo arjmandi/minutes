@@ -26,8 +26,11 @@ PW = "Sup3r-Secret-Pass!"
 def _cap_token(meetings: list[str]) -> str:
     s = get_settings()
     return issue_capability_token(
-        principal="op", secret=s.auth_secret, algorithm=s.auth_algorithm,
-        ttl_s=60, meetings=meetings,
+        principal="op",
+        secret=s.auth_secret,
+        algorithm=s.auth_algorithm,
+        ttl_s=60,
+        meetings=meetings,
     )
 
 

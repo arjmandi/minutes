@@ -55,8 +55,15 @@ def _capture_token(client: TestClient, device_token: str, ext: str) -> str:
 
 def _capture(client: TestClient, token: str, ext: str, *, source: str, call_id: str) -> None:
     with client.websocket_connect(f"/ingest?token={token}") as ws:
-        ws.send_json({"type": "hello", "platform": "meet", "external_meeting_id": ext,
-                      "call_id": call_id, "source": source})
+        ws.send_json(
+            {
+                "type": "hello",
+                "platform": "meet",
+                "external_meeting_id": ext,
+                "call_id": call_id,
+                "source": source,
+            }
+        )
         admitted = ws.receive_json()
         assert admitted["type"] == "admitted"
         assert admitted["source"] == source  # the admit echoes the source
@@ -97,9 +104,7 @@ def test_tab_and_mic_capture_tag_the_transcript():
             f"/api/meetings/{mid}/export?format=txt&source=both&include=transcript"
         ).text
         assert "=== Online stream ===" in both_txt and "=== Host mic ===" in both_txt
-        mic_txt = c.get(
-            f"/api/meetings/{mid}/export?format=txt&source=mic&include=transcript"
-        ).text
+        mic_txt = c.get(f"/api/meetings/{mid}/export?format=txt&source=mic&include=transcript").text
         assert "===" not in mic_txt  # single source: flat, no section headers
         assert c.get(f"/api/meetings/{mid}/export?source=bogus").status_code == 422
         # json carries the source per segment regardless of source filter.
@@ -120,11 +125,21 @@ def test_owner_binding_rejects_other_principal():
 
         s = get_settings()
         intruder = issue_capability_token(
-            principal=str(uuid.uuid4()), secret=s.auth_secret, algorithm=s.auth_algorithm,
-            ttl_s=60, meetings=[f"meet:{ext}"],
+            principal=str(uuid.uuid4()),
+            secret=s.auth_secret,
+            algorithm=s.auth_algorithm,
+            ttl_s=60,
+            meetings=[f"meet:{ext}"],
         )
         with c.websocket_connect(f"/ingest?token={intruder}") as ws:
-            ws.send_json({"type": "hello", "platform": "meet", "external_meeting_id": ext,
-                          "call_id": f"x-{uuid.uuid4().hex[:8]}", "source": "mic"})
+            ws.send_json(
+                {
+                    "type": "hello",
+                    "platform": "meet",
+                    "external_meeting_id": ext,
+                    "call_id": f"x-{uuid.uuid4().hex[:8]}",
+                    "source": "mic",
+                }
+            )
             msg = ws.receive_json()
             assert msg["type"] == "forbidden" and msg["reason"] == "not_owner"

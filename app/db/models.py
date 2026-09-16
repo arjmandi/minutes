@@ -192,9 +192,7 @@ class Session(Base):
 
 class Participant(Base):
     __tablename__ = "participants"
-    __table_args__ = (
-        UniqueConstraint("session_id", "speaker_id", name="uq_participant_speaker"),
-    )
+    __table_args__ = (UniqueConstraint("session_id", "speaker_id", name="uq_participant_speaker"),)
 
     id: Mapped[uuid.UUID] = _uuid_col()
     session_id: Mapped[uuid.UUID] = mapped_column(
@@ -207,9 +205,7 @@ class Participant(Base):
 class TranscriptSegment(Base):
     __tablename__ = "transcript_segments"
     __table_args__ = (
-        UniqueConstraint(
-            "session_id", "speaker_id", "utterance_id", name="uq_segment_utterance"
-        ),
+        UniqueConstraint("session_id", "speaker_id", "utterance_id", name="uq_segment_utterance"),
     )
 
     id: Mapped[uuid.UUID] = _uuid_col()
@@ -263,9 +259,7 @@ class Translation(Base):
 
 class AudioChunk(Base):
     __tablename__ = "audio_chunks"
-    __table_args__ = (
-        UniqueConstraint("session_id", "speaker_id", "seq", name="uq_chunk_seq"),
-    )
+    __table_args__ = (UniqueConstraint("session_id", "speaker_id", "seq", name="uq_chunk_seq"),)
 
     id: Mapped[uuid.UUID] = _uuid_col()
     session_id: Mapped[uuid.UUID] = mapped_column(

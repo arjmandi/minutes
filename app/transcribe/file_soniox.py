@@ -79,9 +79,7 @@ class SonioxFileTranscriber:
         _raise_for_status(resp, "upload")
         return str(resp.json()["id"])
 
-    async def _create(
-        self, client: httpx.AsyncClient, file_id: str, hints: list[str]
-    ) -> str:
+    async def _create(self, client: httpx.AsyncClient, file_id: str, hints: list[str]) -> str:
         body: dict = {
             "file_id": file_id,
             "model": self._model,
@@ -89,18 +87,14 @@ class SonioxFileTranscriber:
         }
         if hints:
             body["language_hints"] = hints
-        resp = await client.post(
-            f"{self._base}/transcriptions", headers=self._headers, json=body
-        )
+        resp = await client.post(f"{self._base}/transcriptions", headers=self._headers, json=body)
         _raise_for_status(resp, "create")
         return str(resp.json()["id"])
 
     async def _await_completion(self, client: httpx.AsyncClient, tx_id: str) -> None:
         waited = 0.0
         while waited < self._timeout_s:
-            resp = await client.get(
-                f"{self._base}/transcriptions/{tx_id}", headers=self._headers
-            )
+            resp = await client.get(f"{self._base}/transcriptions/{tx_id}", headers=self._headers)
             _raise_for_status(resp, "status")
             data = resp.json()
             status = data.get("status")
@@ -167,10 +161,7 @@ def _tokens_to_segments(tokens: list[dict]) -> list[FileSegment]:
         tok_speaker = str(tok.get("speaker") or "mixed")
         tok_start = tok.get("start_ms")
         gap = (
-            buf
-            and end_ms is not None
-            and tok_start is not None
-            and (tok_start - end_ms) > _GAP_MS
+            buf and end_ms is not None and tok_start is not None and (tok_start - end_ms) > _GAP_MS
         )
         if buf and (tok_speaker != speaker or gap):
             flush()

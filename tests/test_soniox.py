@@ -45,8 +45,13 @@ async def test_interim_and_final_segmentation():
         {"tokens": [{"text": "hello ", "is_final": False, "language": "en"}]},
         {
             "tokens": [
-                {"text": "hello world", "is_final": True, "language": "en",
-                 "start_ms": 0, "end_ms": 500},
+                {
+                    "text": "hello world",
+                    "is_final": True,
+                    "language": "en",
+                    "start_ms": 0,
+                    "end_ms": 500,
+                },
                 {"text": "<end>", "is_final": True},
             ]
         },
@@ -73,14 +78,18 @@ async def test_interim_and_final_segmentation():
 
 async def test_multiple_segments_get_distinct_ids():
     scripts = [
-        {"tokens": [
-            {"text": "one", "is_final": True, "language": "en"},
-            {"text": "<end>", "is_final": True},
-        ]},
-        {"tokens": [
-            {"text": "zwei", "is_final": True, "language": "de"},
-            {"text": "<end>", "is_final": True},
-        ]},
+        {
+            "tokens": [
+                {"text": "one", "is_final": True, "language": "en"},
+                {"text": "<end>", "is_final": True},
+            ]
+        },
+        {
+            "tokens": [
+                {"text": "zwei", "is_final": True, "language": "de"},
+                {"text": "<end>", "is_final": True},
+            ]
+        },
         {"tokens": [], "finished": True},
     ]
     server, port = await _fake_server(scripts)
@@ -105,13 +114,33 @@ async def test_recoverable_error_reconnects(monkeypatch):
         await ws.recv()  # config
         attempts["n"] += 1
         if attempts["n"] == 1:
-            await ws.send(json.dumps({"tokens": [], "error_code": 503,
-                                      "error_type": "service_unavailable", "error_message": "cap"}))
+            await ws.send(
+                json.dumps(
+                    {
+                        "tokens": [],
+                        "error_code": 503,
+                        "error_type": "service_unavailable",
+                        "error_message": "cap",
+                    }
+                )
+            )
             return  # close -> client should reconnect
-        await ws.send(json.dumps({"tokens": [
-            {"text": "after retry", "is_final": True, "language": "en",
-             "start_ms": 0, "end_ms": 300},
-            {"text": "<end>", "is_final": True}]}))
+        await ws.send(
+            json.dumps(
+                {
+                    "tokens": [
+                        {
+                            "text": "after retry",
+                            "is_final": True,
+                            "language": "en",
+                            "start_ms": 0,
+                            "end_ms": 300,
+                        },
+                        {"text": "<end>", "is_final": True},
+                    ]
+                }
+            )
+        )
         await ws.send(json.dumps({"tokens": [], "finished": True}))
 
     server = await websockets.serve(handler, "localhost", 0)
@@ -125,9 +154,11 @@ async def test_recoverable_error_reconnects(monkeypatch):
     try:
         t = SonioxTranscriber(api_key="t", language_hints=["en"], url=f"ws://localhost:{port}")
         events = []
+
         async def run():
             async for ev in t.stream(audio()):
                 events.append(ev)
+
         await asyncio.wait_for(run(), timeout=10)
     finally:
         server.close()

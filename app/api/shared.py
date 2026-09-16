@@ -65,7 +65,12 @@ async def shared_export(
             raise HTTPException(status_code=404, detail="not found")
         rows = await _all_segments(db, meeting.id, source=src_filter)
         payload = _export_payload(
-            meeting, rows, fmt=format, include=include, timestamps=timestamps, lang=lang,
+            meeting,
+            rows,
+            fmt=format,
+            include=include,
+            timestamps=timestamps,
+            lang=lang,
             public=True,
         )
     return _export_response(meeting, payload, format, public=True)

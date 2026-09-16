@@ -50,8 +50,12 @@ def _capture(c: TestClient, email: str, ext: str, frames: int = 2) -> str:
     ).json()["token"]
     with c.websocket_connect(f"/ingest?token={token}") as ws:
         ws.send_json(
-            {"type": "hello", "platform": "meet", "external_meeting_id": ext,
-             "call_id": f"rc-{uuid.uuid4().hex[:8]}"}
+            {
+                "type": "hello",
+                "platform": "meet",
+                "external_meeting_id": ext,
+                "call_id": f"rc-{uuid.uuid4().hex[:8]}",
+            }
         )
         assert ws.receive_json()["type"] == "admitted"
         for i in range(frames):

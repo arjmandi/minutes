@@ -30,9 +30,7 @@ class ConfigBody(BaseModel):
 
 
 def _valid_langs(items: list[str]) -> bool:
-    return len(items) <= _MAX_LANGS and all(
-        isinstance(x, str) and 2 <= len(x) <= 16 for x in items
-    )
+    return len(items) <= _MAX_LANGS and all(isinstance(x, str) and 2 <= len(x) <= 16 for x in items)
 
 
 @router.post("/{call_id}/config")

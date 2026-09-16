@@ -226,9 +226,7 @@ class _ScriptedAdapter:
 
 
 async def _run_live() -> object:
-    settings = Settings(
-        _env_file=None, app_env="test", soniox_api_key="", anthropic_api_key=""
-    )
+    settings = Settings(_env_file=None, app_env="test", soniox_api_key="", anthropic_api_key="")
     engine = make_engine(settings.database_url)
     factory = make_session_factory(engine)
     redis = Redis.from_url(settings.redis_url, decode_responses=True)

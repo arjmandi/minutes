@@ -40,9 +40,7 @@ def _make_user(email: str) -> None:
 
 
 def _device_token(client: TestClient, email: str) -> str:
-    r = client.post(
-        "/api/auth/login", json={"email": email, "password": PW, "client": "device"}
-    )
+    r = client.post("/api/auth/login", json={"email": email, "password": PW, "client": "device"})
     assert r.status_code == 200
     return r.json()["device_token"]
 
@@ -184,12 +182,20 @@ def test_failed_translation_never_clobbers_a_good_one():
                     end_ms=20,
                 )
                 await repo.upsert_translation(
-                    db, segment_id=seg_id, target_language="de", text="gut",
-                    status=TranslationStatus.ok, source=TranslationSource.auto,
+                    db,
+                    segment_id=seg_id,
+                    target_language="de",
+                    text="gut",
+                    status=TranslationStatus.ok,
+                    source=TranslationSource.auto,
                 )
                 await repo.upsert_translation(  # failed retry — must be ignored
-                    db, segment_id=seg_id, target_language="de", text="",
-                    status=TranslationStatus.failed, source=TranslationSource.auto,
+                    db,
+                    segment_id=seg_id,
+                    target_language="de",
+                    text="",
+                    status=TranslationStatus.failed,
+                    source=TranslationSource.auto,
                 )
                 await db.commit()
                 db.expire_all()  # Core UPDATE bypasses the ORM map; force a fresh read
@@ -199,8 +205,12 @@ def test_failed_translation_never_clobbers_a_good_one():
                 assert row.text == "gut" and row.status == TranslationStatus.ok
 
                 await repo.upsert_translation(  # successful manual re-translate — wins
-                    db, segment_id=seg_id, target_language="de", text="besser",
-                    status=TranslationStatus.ok, source=TranslationSource.manual,
+                    db,
+                    segment_id=seg_id,
+                    target_language="de",
+                    text="besser",
+                    status=TranslationStatus.ok,
+                    source=TranslationSource.manual,
                 )
                 await db.commit()
                 db.expire_all()

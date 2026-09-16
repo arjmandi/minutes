@@ -84,9 +84,7 @@ async def process_job(
         )
         try:
             audio = await storage.download(job.s3_key)
-            segments = await transcriber.transcribe(
-                audio, language_hints=settings.language_hints
-            )
+            segments = await transcriber.transcribe(audio, language_hints=settings.language_hints)
         except Exception as exc:  # noqa: BLE001 — provider/IO failure -> job fails, not the worker
             await _fail(factory, job.id, f"transcription failed: {exc!r}")
             return
@@ -202,9 +200,7 @@ async def run() -> int:
             )
             for j, res in zip(jobs, results, strict=False):
                 if isinstance(res, Exception):
-                    log.warning(
-                        "transcription.job_crashed", job_id=str(j.id), error=repr(res)
-                    )
+                    log.warning("transcription.job_crashed", job_id=str(j.id), error=repr(res))
         return len(jobs)
     finally:
         await engine.dispose()

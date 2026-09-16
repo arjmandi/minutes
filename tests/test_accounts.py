@@ -93,13 +93,19 @@ def test_web_login_me_settings_keys_password_logout():
         assert rs.json()["default_output_language"] == "de"
 
         # weak new password rejected by the BACKEND, good one accepted
-        assert c.put(
-            "/api/me/password", json={"current_password": GOOD_PW, "new_password": "weak"}
-        ).status_code == 422
-        assert c.put(
-            "/api/me/password",
-            json={"current_password": GOOD_PW, "new_password": "An0ther-Good-Pass!"},
-        ).status_code == 200
+        assert (
+            c.put(
+                "/api/me/password", json={"current_password": GOOD_PW, "new_password": "weak"}
+            ).status_code
+            == 422
+        )
+        assert (
+            c.put(
+                "/api/me/password",
+                json={"current_password": GOOD_PW, "new_password": "An0ther-Good-Pass!"},
+            ).status_code
+            == 200
+        )
 
         assert c.post("/api/auth/logout").status_code == 200
         assert c.get("/api/me").status_code == 401  # cookies cleared
@@ -126,9 +132,12 @@ def test_device_login_and_capture_token():
         assert rc.status_code == 200 and rc.json()["scope"] == "meet:acc-demo"
 
         # no device token -> 401
-        assert c.post(
-            "/api/capture/token", json={"platform": "meet", "external_meeting_id": "x"}
-        ).status_code == 401
+        assert (
+            c.post(
+                "/api/capture/token", json={"platform": "meet", "external_meeting_id": "x"}
+            ).status_code
+            == 401
+        )
 
 
 def test_password_change_invalidates_old_access_token():

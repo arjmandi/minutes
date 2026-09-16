@@ -206,8 +206,12 @@ async def ingest_ws(ws: WebSocket) -> None:
         )
         run_task = asyncio.create_task(manager.run(adapter))
         await ws.send_json(
-            {"type": "admitted", "call_id": call_id, "source": source,
-             "worker_id": registry.worker_id}
+            {
+                "type": "admitted",
+                "call_id": call_id,
+                "source": source,
+                "worker_id": registry.worker_id,
+            }
         )
         log.info("ingest.admitted", call_id=call_id, platform=platform, principal=claims.principal)
 

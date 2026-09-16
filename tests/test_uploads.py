@@ -96,12 +96,13 @@ def test_upload_validation_and_authz():
         _make_user(email)
         _login(c, email)
 
-        assert c.post(
-            "/api/uploads", files={"file": ("e.wav", b"", "audio/wav")}
-        ).status_code == 422
-        assert c.post(
-            "/api/uploads", files={"file": ("n.txt", b"hello", "text/plain")}
-        ).status_code == 415
+        assert (
+            c.post("/api/uploads", files={"file": ("e.wav", b"", "audio/wav")}).status_code == 422
+        )
+        assert (
+            c.post("/api/uploads", files={"file": ("n.txt", b"hello", "text/plain")}).status_code
+            == 415
+        )
 
         jid = c.post("/api/uploads", files=_audio(16)).json()["id"]
         other = f"oo-{uuid.uuid4().hex[:8]}@test.io"

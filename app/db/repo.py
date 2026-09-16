@@ -373,9 +373,7 @@ async def create_transcription_job(
     return job
 
 
-async def get_transcription_job(
-    db: AsyncSession, job_id: uuid.UUID
-) -> TranscriptionJob | None:
+async def get_transcription_job(db: AsyncSession, job_id: uuid.UUID) -> TranscriptionJob | None:
     return await db.get(TranscriptionJob, job_id)
 
 
@@ -388,9 +386,7 @@ async def list_transcription_jobs_for_user(
     return list((await db.execute(q)).scalars())
 
 
-async def claim_queued_jobs(
-    db: AsyncSession, *, run_id: str, limit: int
-) -> list[TranscriptionJob]:
+async def claim_queued_jobs(db: AsyncSession, *, run_id: str, limit: int) -> list[TranscriptionJob]:
     """Atomically claim up to ``limit`` queued jobs (FOR UPDATE SKIP LOCKED) -> processing.
 
     Concurrent workers never grab the same job; the caller processes the returned jobs and commits.
@@ -398,14 +394,18 @@ async def claim_queued_jobs(
     if limit < 1:
         return []
     ids = (
-        await db.execute(
-            select(TranscriptionJob.id)
-            .where(TranscriptionJob.status == JobStatus.queued)
-            .order_by(TranscriptionJob.created_at)
-            .limit(limit)
-            .with_for_update(skip_locked=True)
+        (
+            await db.execute(
+                select(TranscriptionJob.id)
+                .where(TranscriptionJob.status == JobStatus.queued)
+                .order_by(TranscriptionJob.created_at)
+                .limit(limit)
+                .with_for_update(skip_locked=True)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     if not ids:
         return []
     await db.execute(
