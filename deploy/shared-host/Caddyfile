@@ -28,6 +28,11 @@
 		file_server
 	}
 
+	# Optional WebDAV add-on (compose profile "webdav"); answers 502 when the profile is off.
+	handle /webdav/* {
+		reverse_proxy webdav:80
+	}
+
 	handle {
 		root * /srv/landing
 		@nolanding {

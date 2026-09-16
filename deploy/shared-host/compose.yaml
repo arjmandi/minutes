@@ -149,6 +149,19 @@ services:
       retries: 3
     mem_limit: 256m
     logging: *logging
+  webdav:
+    # Optional add-on (compose profile "webdav", enabled with COMPOSE_PROFILES=webdav in .env):
+    # a WebDAV endpoint at /webdav/* for a notes vault, isolated from the product. Host files:
+    # ./webdav/Caddyfile (basic-auth hash, see webdav/Caddyfile.example) and ./webdav/data.
+    profiles: [webdav]
+    image: caddy-webdav:local
+    build: ./webdav
+    restart: unless-stopped
+    volumes:
+      - ./webdav/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./webdav/data:/srv
+    mem_limit: 256m
+    logging: *logging
 networks:
   oddproof-edge:
     external: true

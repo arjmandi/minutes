@@ -1,0 +1,19 @@
+# Copy to ~/minutes/webdav/Caddyfile on the host and replace the hash:
+#   docker run --rm caddy-webdav:local caddy hash-password --plaintext '<password>'
+# Internal, HTTP-only WebDAV endpoint reached only through the `web` router at /webdav/*.
+{
+	admin off
+	auto_https off
+	order webdav before file_server
+}
+
+:80 {
+	basic_auth {
+		obsidian <bcrypt hash>
+	}
+
+	webdav /webdav/* {
+		root   /srv
+		prefix /webdav
+	}
+}

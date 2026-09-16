@@ -40,3 +40,10 @@ without it the app is served at `/`. The edge project must be running.
 3. Lower the DNS TTL a day ahead, point `gettheminutes.com` at the new host at cutover, keep
    the old box a week for rollback. The capture extension and the PWA keep working because
    the hostname does not change.
+
+## Optional WebDAV add-on
+
+`COMPOSE_PROFILES=webdav` in `~/minutes/.env` starts a small Caddy with the WebDAV module
+serving `~/minutes/webdav/data` at `https://gettheminutes.com/webdav/` behind basic auth
+(`webdav/Caddyfile.example`). The image builds on the host from `webdav/Dockerfile`; nothing
+in the product depends on it.
