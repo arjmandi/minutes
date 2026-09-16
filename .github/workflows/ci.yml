@@ -1,0 +1,36 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: minutes
+          POSTGRES_PASSWORD: minutes
+          POSTGRES_DB: minutes
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U minutes" --health-interval 5s --health-timeout 3s --health-retries 20
+      redis:
+        image: valkey/valkey:8
+        ports: ["6379:6379"]
+        options: --health-cmd "valkey-cli ping" --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      MINUTES_DATABASE_URL: postgresql+asyncpg://minutes:minutes@localhost:5432/minutes
+      MINUTES_REDIS_URL: redis://localhost:6379/0
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - name: Install locked dependencies
+        run: uv sync --frozen
+      - name: Lint and format check
+        run: uv run ruff check . && uv run ruff format --check .
+      - name: Tests
+        run: uv run pytest -q

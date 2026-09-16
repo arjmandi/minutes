@@ -1,0 +1,42 @@
+# Internal HTTP router for the shared-host deployment. TLS, HSTS and the public hostname
+# live in the Oddproof edge; this container only splits paths on one origin:
+#   /            -> marketing landing (static, ./landing; falls back to the app when absent)
+#   /docs        -> documentation site (static Docusaurus build, ./docs, baseUrl /docs/)
+#   /app, /api, /assets, /shared, /ingest, /healthz, /readyz, PWA files -> backend
+# WebSockets (capture ingest, live view) are proxied transparently on both hops.
+{
+	auto_https off
+	admin off
+}
+
+:80 {
+	encode zstd gzip
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+	}
+
+	redir /docs /docs/ permanent
+
+	@app path /app /app/* /api/* /assets/* /shared /shared/* /ingest /healthz /readyz /sw.js /manifest.webmanifest
+	handle @app {
+		reverse_proxy backend:8000
+	}
+
+	handle /docs/* {
+		root * /srv
+		file_server
+	}
+
+	handle {
+		root * /srv/landing
+		@nolanding {
+			not file /index.html
+		}
+		handle @nolanding {
+			reverse_proxy backend:8000
+		}
+		try_files {path} /index.html
+		file_server
+	}
+}

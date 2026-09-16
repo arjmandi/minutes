@@ -1,0 +1,62 @@
+name: Deploy
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+concurrency:
+  group: deploy-minutes
+  cancel-in-progress: false
+permissions:
+  contents: read
+  packages: write
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: production
+    env:
+      IMAGE: ghcr.io/arjmandi/minutes/backend
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push the backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ env.IMAGE }}:${{ github.sha }},${{ env.IMAGE }}:${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Build the documentation site
+        working-directory: docs-site
+        run: npm ci && npm run build
+      - name: Join the tailnet as a CI node
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+      - name: Sync and deploy over the tailnet
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          cp .github/known_hosts ~/.ssh/known_hosts
+          SSH="ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=20"
+          $SSH "deploy@$DEPLOY_HOST" 'mkdir -p ~/minutes/docs ~/minutes/landing ~/minutes/backups'
+          rsync -az --delete --exclude .env --exclude .image-tag -e "$SSH" deploy/shared-host/ "deploy@$DEPLOY_HOST:minutes/"
+          rsync -az --delete -e "$SSH" docs-site/build/ "deploy@$DEPLOY_HOST:minutes/docs/"
+          printf '%s' "$GHCR_TOKEN" | $SSH "deploy@$DEPLOY_HOST" "docker login ghcr.io -u '${{ github.actor }}' --password-stdin"
+          $SSH "deploy@$DEPLOY_HOST" "IMAGE_TAG=${{ github.sha }} sh ~/minutes/deploy.sh"

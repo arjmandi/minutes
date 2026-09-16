@@ -1,0 +1,157 @@
+# Minutes on the shared Oddproof host, behind the Oddproof edge proxy
+# (arjmandi/oddproof-edge). Nothing here publishes a host port: the edge terminates TLS
+# for gettheminutes.com and forwards to the `web` container over the shared
+# `oddproof-edge` network. Images come from GHCR, built by the deploy workflow.
+name: minutes
+x-image: &image ghcr.io/arjmandi/minutes/backend:${IMAGE_TAG:?Set the image tag}
+x-app-env: &app-env
+  MINUTES_APP_ENV: prod
+  MINUTES_RUN_MIGRATIONS: "0" # the one-shot `migrate` service owns schema upgrades
+  MINUTES_DATABASE_URL: postgresql+asyncpg://minutes:${POSTGRES_PASSWORD}@postgres:5432/minutes
+  MINUTES_REDIS_URL: redis://redis:6379/0
+  MINUTES_S3_ENABLED: "true"
+  MINUTES_S3_ENDPOINT_URL: http://minio:9000
+  MINUTES_S3_REGION: eu-central-1
+  MINUTES_S3_BUCKET: minutes-audio
+  MINUTES_S3_ACCESS_KEY: ${MINUTES_S3_ACCESS_KEY}
+  MINUTES_S3_SECRET_KEY: ${MINUTES_S3_SECRET_KEY}
+  MINUTES_AUTH_SECRET: ${MINUTES_AUTH_SECRET}
+  MINUTES_SECRET_KEY: ${MINUTES_SECRET_KEY}
+  MINUTES_SONIOX_API_KEY: ${MINUTES_SONIOX_API_KEY}
+  MINUTES_SONIOX_REGION: ${MINUTES_SONIOX_REGION:-eu}
+  MINUTES_ANTHROPIC_API_KEY: ${MINUTES_ANTHROPIC_API_KEY:-}
+  MINUTES_TRANSLATION_TARGETS: ${MINUTES_TRANSLATION_TARGETS:-["de"]}
+  MINUTES_MAX_CONCURRENT_CALLS: ${MINUTES_MAX_CONCURRENT_CALLS:-10}
+  MINUTES_REQUIRE_CONSENT: ${MINUTES_REQUIRE_CONSENT:-true}
+  MINUTES_RETENTION_DAYS: ${MINUTES_RETENTION_DAYS:-90}
+x-logging: &logging
+  driver: json-file
+  options: {max-size: 10m, max-file: "5"}
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: minutes
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: minutes
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./backups:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U minutes"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 2g
+    logging: *logging
+  redis:
+    image: valkey/valkey:8
+    restart: unless-stopped
+    command: ["valkey-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 512m
+    logging: *logging
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - miniodata:/data
+    mem_limit: 1g
+    logging: *logging
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    depends_on:
+      minio:
+        condition: service_started
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINUTES_S3_ACCESS_KEY: ${MINUTES_S3_ACCESS_KEY}
+      MINUTES_S3_SECRET_KEY: ${MINUTES_S3_SECRET_KEY}
+    entrypoint: ["/bin/sh", "/minio-init.sh"]
+    volumes:
+      - ./minio-init.sh:/minio-init.sh:ro
+    restart: "no"
+  migrate:
+    image: *image
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *app-env
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+  backend:
+    image: *image
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *app-env
+    expose: ["8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz')"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    mem_limit: 2g
+    logging: *logging
+  scheduler:
+    image: *image
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      <<: *app-env
+    entrypoint: ["/bin/sh", "/scheduler.sh"]
+    volumes:
+      - ./scheduler.sh:/scheduler.sh:ro
+    mem_limit: 512m
+    logging: *logging
+  web:
+    # Internal HTTP router: the same path split as the single-box Caddyfile, minus TLS,
+    # which the Oddproof edge terminates. Reached by the edge as minutes-web.
+    image: caddy:2-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      default: {}
+      oddproof-edge:
+        aliases: [minutes-web]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./landing:/srv/landing:ro
+      - ./docs:/srv/docs:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/readyz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    mem_limit: 256m
+    logging: *logging
+networks:
+  oddproof-edge:
+    external: true
+volumes:
+  pgdata:
+  miniodata:
