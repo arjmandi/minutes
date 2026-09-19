@@ -7,6 +7,16 @@ import os
 import pytest
 import redis as redis_sync
 
+# The suite is written against the deterministic fakes (FakeTranscriber emits one segment per
+# frame, FakeTranslator and FakeStorage need no network). Provider selection is configuration
+# read through ``.env``, and a developer's ``.env`` usually carries real keys, so without this
+# override the end-to-end tests would stream silent test frames to Soniox and count fewer
+# segments than the fakes produce. Environment variables take precedence over ``.env``, and
+# this module is imported before any test module imports ``app.main``.
+for _name in ("MINUTES_SONIOX_API_KEY", "MINUTES_ANTHROPIC_API_KEY"):
+    os.environ[_name] = ""
+os.environ["MINUTES_S3_ENABLED"] = "false"
+
 
 @pytest.fixture(scope="session", autouse=True)
 def _clear_admission_slots():
